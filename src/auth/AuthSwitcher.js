@@ -143,6 +143,16 @@ class AuthSwitcher {
                 const tryIndex = (startIndex + i) % available.length;
                 const accountIndex = available[tryIndex];
 
+                // Skip accounts quarantined for WebSocket crash loops so
+                // recovery does not immediately land back on a flapping context.
+                if (typeof this.crashLoopChecker === "function" && this.crashLoopChecker(accountIndex)) {
+                    this.logger.warn(
+                        `🔄 [Auth] Skipping account #${accountIndex} (WebSocket crash loop quarantine active), trying next account...`
+                    );
+                    failedAccounts.push(accountIndex);
+                    continue;
+                }
+
                 const attemptNumber = i - startOffset + 1;
                 this.logger.info(
                     `🔄 [Auth] Attempting to switch to account #${accountIndex} (${attemptNumber}/${tryCount} accounts)...`

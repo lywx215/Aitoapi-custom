@@ -19,6 +19,18 @@ const { QueueClosedError, QueueTimeoutError } = require("../utils/MessageQueue")
 const WS_RECONNECT_WAIT_MS = 130000;
 const WS_CONNECTION_READY_TIMEOUT_MS = 10000;
 
+// WebSocket crash-loop quarantine & auto-heal tuning:
+// - 3 unexpected drops within 60s  => 2-minute soft quarantine (routing/recovery skip it)
+// - 2 quarantine episodes          => auto-disable (disabledReason=crash_loop, file persisted)
+// - disabled crash-loop accounts    => probed every 10 minutes; healthy ones get re-enabled
+// - 3 crash-loop episodes total     => stop auto-probing; leave disabled for human review
+const WS_CRASH_WINDOW_MS = 60000;
+const WS_CRASH_DROP_THRESHOLD = 3;
+const WS_CRASH_ISOLATE_MS = 120000;
+const WS_CRASH_DISABLE_AFTER_EPISODES = 2;
+const WS_CRASH_MAX_EPISODES = 3;
+const WS_CRASH_PROBE_INTERVAL_MS = 600000;
+
 // Default timeout constants (in milliseconds)
 const DEFAULT_TIMEOUTS = {
     FAKE_STREAM: 300000, // 300 seconds (5 minutes) - timeout for fake streaming (buffered response)
@@ -36,6 +48,10 @@ class RequestHandler {
 
         // Initialize sub-modules
         this.authSwitcher = new AuthSwitcher(logger, config, authSource, browserManager);
+        // The switcher consults RequestHandler's WebSocket crash-loop quarantine
+        // when picking the next account so recovery never lands back on a
+        // flapping browser context.
+        this.authSwitcher.crashLoopChecker = authIndex => this._isInWsCrashLoop(authIndex);
         this.formatConverter = new FormatConverter(logger, serverSystem);
 
         this.needsSwitchingAfterRequest = false;
@@ -205,6 +221,7 @@ class RequestHandler {
                     return false;
                 }
                 if (this._isAuthUnavailable(authIndex)) return false;
+                if (this._isInWsCrashLoop(authIndex)) return false;
                 const routeState = this.accountRouteState.get(authIndex);
                 if (routeState?.cooldownUntil > now) return false;
                 if (this._isPerAccountUsageRoutingEnabled() && routeState?.usageExhausted) return false;
@@ -223,6 +240,7 @@ class RequestHandler {
                 (!Array.isArray(this.authSource?.availableIndices) ||
                     this.authSource.availableIndices.includes(current)) &&
                 !this._isAuthUnavailable(current) &&
+                !this._isInWsCrashLoop(current) &&
                 currentConnection &&
                 currentConnection.readyState === 1 &&
                 (!currentState?.cooldownUntil || currentState.cooldownUntil <= now) &&
@@ -254,6 +272,10 @@ class RequestHandler {
                 usageCount: 0,
                 usageExhausted: false,
                 usageExhaustedAt: 0,
+                wsDropCount: 0,
+                wsDropWindowStart: 0,
+                wsCrashLoopUntil: 0,
+                crashLoopEpisodes: 0,
             };
         }
         if (!this.accountRouteState.has(authIndex)) {
@@ -268,13 +290,198 @@ class RequestHandler {
                 usageCount: 0,
                 usageExhausted: false,
                 usageExhaustedAt: 0,
+                wsDropCount: 0,
+                wsDropWindowStart: 0,
+                wsCrashLoopUntil: 0,
+                crashLoopEpisodes: 0,
             });
         }
-        return this.accountRouteState.get(authIndex);
+        const state = this.accountRouteState.get(authIndex);
+        // Persisted state restored from JSON may predate the crash-loop fields;
+        // back-fill them so drop counting and quarantine keep working after restart.
+        if (typeof state.wsDropCount !== "number") {
+            state.wsDropCount = 0;
+            state.wsDropWindowStart = 0;
+            state.wsCrashLoopUntil = 0;
+            state.crashLoopEpisodes = 0;
+        }
+        return state;
+    }
+
+    // WebSocket crash-loop detection: when a browser context's WebSocket keeps
+    // dropping and reconnecting within a short window, the account is
+    // temporarily quarantined so routing and recovery stop bouncing back to it.
+    _isInWsCrashLoop(authIndex) {
+        if (!Number.isInteger(authIndex) || authIndex < 0) return false;
+        const state = this.accountRouteState.get(authIndex);
+        return !!(state && state.wsCrashLoopUntil > Date.now());
+    }
+
+    async recordWsDisconnect(authIndex) {
+        if (!Number.isInteger(authIndex) || authIndex < 0) return;
+        const state = this._getAccountRouteState(authIndex);
+        const now = Date.now();
+        if (now - state.wsDropWindowStart > WS_CRASH_WINDOW_MS) {
+            state.wsDropWindowStart = now;
+            state.wsDropCount = 0;
+        }
+        state.wsDropCount += 1;
+        this.logger.warn(
+            `[System] WebSocket drop #${state.wsDropCount} recorded for account #${authIndex} ` +
+                `(window started ${new Date(state.wsDropWindowStart).toISOString()}).`
+        );
+        if (state.wsDropCount >= WS_CRASH_DROP_THRESHOLD) {
+            // Already auto-disabled (crash_loop) and out of rotation: stop
+            // re-quarantining / re-disabling on every further drop — the probe
+            // cycle is the only thing that should re-evaluate this account.
+            if (this.authSource?.isDisabled?.(authIndex)) return;
+
+            state.wsCrashLoopUntil = now + WS_CRASH_ISOLATE_MS;
+            state.crashLoopEpisodes = (state.crashLoopEpisodes || 0) + 1;
+            const episodes = state.crashLoopEpisodes;
+            this.logger.error(
+                `⛔ [System] Account #${authIndex} detected in WebSocket crash loop ` +
+                    `(${state.wsDropCount} drops in ${WS_CRASH_WINDOW_MS / 1000}s). ` +
+                    `Quarantined from routing/recovery until ${new Date(state.wsCrashLoopUntil).toISOString()} ` +
+                    `(crash-loop episode ${episodes}/${WS_CRASH_DISABLE_AFTER_EPISODES} before auto-disable).`
+            );
+
+            // Repeated crash-loop episodes escalate to an automatic disable so the
+            // account fully leaves rotation (persisted to its auth file) instead of
+            // indefinitely bouncing between quarantine and routing.
+            if (episodes >= WS_CRASH_DISABLE_AFTER_EPISODES) {
+                let disabled = false;
+                try {
+                    disabled = await this.authSource?.disableAuth?.(authIndex, { reason: "crash_loop" }) === true;
+                } catch (e) {
+                    this.logger.error(`[System] Failed to auto-disable account #${authIndex}: ${e.message}`);
+                }
+                if (disabled) {
+                    this.logger.error(
+                        `⛔ [System] Account #${authIndex} auto-disabled after ${episodes} crash-loop episodes ` +
+                            `(reason: crash_loop). Auto-heal probe will re-test it periodically.`
+                    );
+                    // Drop its browser context so it stops occupying a MAX_CONTEXTS slot.
+                    try {
+                        if (this.browserManager?.contexts?.has(authIndex)) {
+                            await this.browserManager.closeContext(authIndex);
+                            this.logger.info(`[System] Closed context #${authIndex} after auto-disable.`);
+                        }
+                    } catch (e) {
+                        this.logger.warn(`[System] Failed to close context #${authIndex}: ${e.message}`);
+                    }
+                }
+            }
+        }
     }
 
     _isPerAccountUsageRoutingEnabled() {
         return this.config.maxContexts === 0 || this.config.maxContexts > 1;
+    }
+
+    /**
+     * Periodically probe accounts that were auto-disabled for WebSocket crash
+     * loops and re-enable the ones that can serve traffic again.
+     */
+    startAutoHealProbe() {
+        if (this.autoHealTimer) return;
+        this.autoHealTimer = setInterval(() => {
+            this._runAutoHealProbe().catch(error => {
+                this.logger.error(`[AutoHeal] Probe cycle failed: ${error.message}`);
+            });
+        }, WS_CRASH_PROBE_INTERVAL_MS);
+        if (typeof this.autoHealTimer.unref === "function") this.autoHealTimer.unref();
+        this.logger.info(
+            `[AutoHeal] Crash-loop account probe scheduled every ${WS_CRASH_PROBE_INTERVAL_MS / 60000} minutes.`
+        );
+    }
+
+    async _runAutoHealProbe() {
+        const candidates = (this.authSource?.availableIndices || []).filter(authIndex => {
+            const status = this.authSource?.getStatusMetadata?.(authIndex);
+            if (!status || status.disabledReason !== "crash_loop") return false;
+            const state = this._getAccountRouteState(authIndex);
+            // Too many crash-loop episodes: leave disabled for human review.
+            if ((state.crashLoopEpisodes || 0) >= WS_CRASH_MAX_EPISODES) return false;
+            // Still quarantined: wait for the quarantine window to pass.
+            if (state.wsCrashLoopUntil > Date.now()) return false;
+            return true;
+        });
+        if (candidates.length === 0) {
+            this.logger.info("[AutoHeal] Probe cycle: no crash-loop-disabled accounts to test.");
+            return;
+        }
+        this.logger.info(
+            `[AutoHeal] Probing ${candidates.length} crash-loop-disabled account(s): [#${candidates.join(", #")}]`
+        );
+        for (const authIndex of candidates) {
+            try {
+                await this._probeAndRestoreAccount(authIndex);
+            } catch (error) {
+                this.logger.warn(`[AutoHeal] Probe #${authIndex} failed: ${error.message}`);
+            }
+        }
+    }
+
+    async _probeAndRestoreAccount(authIndex) {
+        if (this.authSwitcher?.isSystemBusy) {
+            this.logger.info(`[AutoHeal] System busy, skipping probe for #${authIndex}.`);
+            return { skipped: true, reason: "busy" };
+        }
+        // Count this probe as one attempt up front: it is kept on failure and
+        // cleared on success, so accounts that never recover eventually cross
+        // WS_CRASH_MAX_EPISODES and stop being probed (human review).
+        const routeState = this._getAccountRouteState(authIndex);
+        routeState.crashLoopEpisodes = (routeState.crashLoopEpisodes || 0) + 1;
+        // Probe = restore attempt: enable first (writes auth file + rotation),
+        // then start a context and validate page/WS like the panel's Test button.
+        try {
+            const enabled = await this.authSource.enableAuth(authIndex);
+            if (!enabled) {
+                this.logger.warn(`[AutoHeal] enableAuth(#${authIndex}) returned false, keeping disabled.`);
+                return { restored: false, reason: "enable_failed" };
+            }
+            let contextData = this.browserManager?.contexts?.get(authIndex);
+            if (!contextData) {
+                const warmed =
+                    typeof this.browserManager.ensureContextForAuth === "function" &&
+                    (await this.browserManager.ensureContextForAuth(authIndex));
+                if (!warmed) {
+                    this.logger.warn(`[AutoHeal] #${authIndex} context could not be warmed, rolling back enable.`);
+                    await this.authSource.disableAuth(authIndex, { reason: "crash_loop" });
+                    return { restored: false, reason: "warm_failed" };
+                }
+                contextData = this.browserManager.contexts.get(authIndex);
+            }
+            const connection = this.connectionRegistry.getConnectionByAuth(authIndex, false);
+            if (!contextData?.page || contextData.page.isClosed() || !connection || connection.readyState !== 1) {
+                const wsReady = await this._waitForConnectionForAuth(authIndex, WS_CONNECTION_READY_TIMEOUT_MS);
+                if (!wsReady) throw new Error("context or WebSocket not ready");
+            }
+            await this.browserManager._checkPageStatusAndErrors(
+                this.browserManager.contexts.get(authIndex).page,
+                `[AutoHeal#${authIndex}]`,
+                authIndex
+            );
+            // Healthy: clear crash-loop counters and keep the account enabled.
+            const state = this._getAccountRouteState(authIndex);
+            state.wsDropCount = 0;
+            state.wsDropWindowStart = 0;
+            state.wsCrashLoopUntil = 0;
+            state.crashLoopEpisodes = 0;
+            this.logger.error(`✅ [AutoHeal] Account #${authIndex} probed OK, restored to rotation.`);
+            return { restored: true };
+        } catch (error) {
+            // Not healthy yet: keep the episode counter (already counted above),
+            // re-disable and let the next probe cycle retry.
+            try {
+                await this.authSource.disableAuth(authIndex, { reason: "crash_loop" });
+            } catch (e) {
+                this.logger.warn(`[AutoHeal] Re-disable #${authIndex} failed: ${e.message}`);
+            }
+            this.logger.warn(`[AutoHeal] Account #${authIndex} probe failed (${error.message}), kept disabled.`);
+            return { restored: false, reason: error.message };
+        }
     }
 
     _incrementGenerationUsage(requestId, fallbackAuthIndex, label) {
@@ -1771,8 +1978,16 @@ class RequestHandler {
             });
         }
 
-        // Determine if this is first-time startup or actual crash recovery
-        const recoveryAuthIndex = this.currentAuthIndex;
+        // If the current account is in a WebSocket crash loop, do not keep
+        // direct-recovering to it; force a switch to a different account.
+        let recoveryAuthIndex = this.currentAuthIndex;
+        if (this._isInWsCrashLoop(recoveryAuthIndex)) {
+            this.logger.warn(
+                `[System] Account #${recoveryAuthIndex} is in a WebSocket crash loop; ` +
+                    `skipping direct recovery and switching to another account.`
+            );
+            recoveryAuthIndex = -1;
+        }
         const isFirstTimeStartup = recoveryAuthIndex < 0 && !this.browserManager.browser;
 
         if (isFirstTimeStartup) {

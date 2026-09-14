@@ -58,6 +58,11 @@ class ProxyServerSystem extends EventEmitter {
                     return;
                 }
 
+                // Record the unexpected drop for crash-loop quarantine BEFORE any
+                // reconnect/recovery retries so flapping contexts get excluded
+                // from routing and switching while it keeps bouncing.
+                await this.requestHandler?.recordWsDisconnect?.(authIndex);
+
                 // Check if this is the current account
                 const currentAuthIndex = this.browserManager.currentAuthIndex;
                 const isCurrentAccount = authIndex === currentAuthIndex;
@@ -120,6 +125,10 @@ class ProxyServerSystem extends EventEmitter {
         await this._startHttpServer();
         await this._startWebSocketServer();
         this.logger.info(`[System] Proxy server system startup complete.`);
+
+        // Periodically probe accounts auto-disabled for WebSocket crash loops
+        // and restore the ones that can serve traffic again.
+        this.requestHandler.startAutoHealProbe();
 
         // Start periodic cleanup of stale message queues (every 5 minutes)
         // This is a safety mechanism to prevent queue leaks from race conditions
