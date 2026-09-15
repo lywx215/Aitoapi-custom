@@ -31,6 +31,14 @@ const WS_CRASH_DISABLE_AFTER_EPISODES = 2;
 const WS_CRASH_MAX_EPISODES = 3;
 const WS_CRASH_PROBE_INTERVAL_MS = 600000;
 
+// Quota (HTTP 429) circuit breaker:
+// - a single upstream 429 on an account temporarily disables that credential so
+//   routing immediately switches to other credentials (no more unlimited 429 retry)
+// - the account is re-probed after QUOTA_EXHAUST_DISABLE_MS; healthy ones return
+// - QUOTA_PROBE_MAX_EPISODES consecutive failed probes -> stop for human review
+const QUOTA_EXHAUST_DISABLE_MS = 20 * 60 * 1000; // 20 minutes
+const QUOTA_PROBE_MAX_EPISODES = 3;
+
 // Default timeout constants (in milliseconds)
 const DEFAULT_TIMEOUTS = {
     FAKE_STREAM: 300000, // 300 seconds (5 minutes) - timeout for fake streaming (buffered response)
@@ -95,6 +103,9 @@ class RequestHandler {
                 );
                 this.accountRouteState.set(authIndex, {
                     cooldownUntil: Number(saved.cooldownUntil) > now ? Number(saved.cooldownUntil) : 0,
+                    quotaDisabledUntil:
+                        Number(saved.quotaDisabledUntil) > now ? Number(saved.quotaDisabledUntil) : 0,
+                    quotaProbeEpisodes: Number(saved.quotaProbeEpisodes) || 0,
                     inFlight: 0,
                     lastError: saved.lastError || null,
                     lastStatus: Number.isFinite(Number(saved.lastStatus)) ? Number(saved.lastStatus) : null,
@@ -118,6 +129,8 @@ class RequestHandler {
         for (const [authIndex, state] of this.accountRouteState.entries()) {
             accounts[String(authIndex)] = {
                 cooldownUntil: state.cooldownUntil || 0,
+                quotaDisabledUntil: state.quotaDisabledUntil || 0,
+                quotaProbeEpisodes: state.quotaProbeEpisodes || 0,
                 lastError: state.lastError || null,
                 lastStatus: state.lastStatus || null,
                 modelCooldowns: state.modelCooldowns || {},
@@ -276,6 +289,8 @@ class RequestHandler {
                 wsDropWindowStart: 0,
                 wsCrashLoopUntil: 0,
                 crashLoopEpisodes: 0,
+                quotaDisabledUntil: 0,
+                quotaProbeEpisodes: 0,
             };
         }
         if (!this.accountRouteState.has(authIndex)) {
@@ -297,8 +312,12 @@ class RequestHandler {
             });
         }
         const state = this.accountRouteState.get(authIndex);
-        // Persisted state restored from JSON may predate the crash-loop fields;
-        // back-fill them so drop counting and quarantine keep working after restart.
+        // Persisted state restored from JSON may predate the crash-loop/quota fields;
+        // back-fill them so drop counting, quarantine and quota breaker keep working.
+        if (typeof state.quotaDisabledUntil !== "number") {
+            state.quotaDisabledUntil = 0;
+            state.quotaProbeEpisodes = 0;
+        }
         if (typeof state.wsDropCount !== "number") {
             state.wsDropCount = 0;
             state.wsDropWindowStart = 0;
@@ -380,8 +399,8 @@ class RequestHandler {
     }
 
     /**
-     * Periodically probe accounts that were auto-disabled for WebSocket crash
-     * loops and re-enable the ones that can serve traffic again.
+     * Periodically probe accounts that were auto-disabled (WebSocket crash loops
+     * or temporary quota exhaustion) and re-enable the ones that can serve again.
      */
     startAutoHealProbe() {
         if (this.autoHealTimer) return;
@@ -392,47 +411,66 @@ class RequestHandler {
         }, WS_CRASH_PROBE_INTERVAL_MS);
         if (typeof this.autoHealTimer.unref === "function") this.autoHealTimer.unref();
         this.logger.info(
-            `[AutoHeal] Crash-loop account probe scheduled every ${WS_CRASH_PROBE_INTERVAL_MS / 60000} minutes.`
+            `[AutoHeal] Disabled-account probe scheduled every ${WS_CRASH_PROBE_INTERVAL_MS / 60000} minutes.`
         );
     }
 
     async _runAutoHealProbe() {
-        const candidates = (this.authSource?.availableIndices || []).filter(authIndex => {
+        const candidates = [];
+        const crashLoop = [];
+        const quotaExhausted = [];
+        for (const authIndex of this.authSource?.availableIndices || []) {
             const status = this.authSource?.getStatusMetadata?.(authIndex);
-            if (!status || status.disabledReason !== "crash_loop") return false;
+            if (!status || !status.disabledReason) continue;
             const state = this._getAccountRouteState(authIndex);
-            // Too many crash-loop episodes: leave disabled for human review.
-            if ((state.crashLoopEpisodes || 0) >= WS_CRASH_MAX_EPISODES) return false;
-            // Still quarantined: wait for the quarantine window to pass.
-            if (state.wsCrashLoopUntil > Date.now()) return false;
-            return true;
-        });
+            if (status.disabledReason === "crash_loop") {
+                // Too many crash-loop episodes: leave disabled for human review.
+                if ((state.crashLoopEpisodes || 0) >= WS_CRASH_MAX_EPISODES) continue;
+                // Still quarantined: wait for the quarantine window to pass.
+                if (state.wsCrashLoopUntil > Date.now()) continue;
+                crashLoop.push(authIndex);
+                candidates.push(authIndex);
+            } else if (status.disabledReason === "quota_exhausted") {
+                // Too many failed quota probes: stop for human review.
+                if ((state.quotaProbeEpisodes || 0) >= QUOTA_PROBE_MAX_EPISODES) continue;
+                // Quota window not elapsed yet: wait for it to pass.
+                if (state.quotaDisabledUntil > Date.now()) continue;
+                quotaExhausted.push(authIndex);
+                candidates.push(authIndex);
+            }
+        }
         if (candidates.length === 0) {
-            this.logger.info("[AutoHeal] Probe cycle: no crash-loop-disabled accounts to test.");
+            this.logger.info("[AutoHeal] Probe cycle: no disabled accounts to test.");
             return;
         }
         this.logger.info(
-            `[AutoHeal] Probing ${candidates.length} crash-loop-disabled account(s): [#${candidates.join(", #")}]`
+            `[AutoHeal] Probing ${candidates.length} disabled account(s) ` +
+                `(crash-loop: [#${crashLoop.join(", #")}] quota: [#${quotaExhausted.join(", #")}]).`
         );
         for (const authIndex of candidates) {
             try {
-                await this._probeAndRestoreAccount(authIndex);
+                const reason = crashLoop.includes(authIndex) ? "crash_loop" : "quota_exhausted";
+                await this._probeAndRestoreAccount(authIndex, reason);
             } catch (error) {
                 this.logger.warn(`[AutoHeal] Probe #${authIndex} failed: ${error.message}`);
             }
         }
     }
 
-    async _probeAndRestoreAccount(authIndex) {
+    async _probeAndRestoreAccount(authIndex, reason = "crash_loop") {
         if (this.authSwitcher?.isSystemBusy) {
             this.logger.info(`[AutoHeal] System busy, skipping probe for #${authIndex}.`);
             return { skipped: true, reason: "busy" };
         }
         // Count this probe as one attempt up front: it is kept on failure and
         // cleared on success, so accounts that never recover eventually cross
-        // WS_CRASH_MAX_EPISODES and stop being probed (human review).
+        // the max-episode threshold and stop being probed (human review).
         const routeState = this._getAccountRouteState(authIndex);
-        routeState.crashLoopEpisodes = (routeState.crashLoopEpisodes || 0) + 1;
+        if (reason === "quota_exhausted") {
+            routeState.quotaProbeEpisodes = (routeState.quotaProbeEpisodes || 0) + 1;
+        } else {
+            routeState.crashLoopEpisodes = (routeState.crashLoopEpisodes || 0) + 1;
+        }
         // Probe = restore attempt: enable first (writes auth file + rotation),
         // then start a context and validate page/WS like the panel's Test button.
         try {
@@ -448,7 +486,7 @@ class RequestHandler {
                     (await this.browserManager.ensureContextForAuth(authIndex));
                 if (!warmed) {
                     this.logger.warn(`[AutoHeal] #${authIndex} context could not be warmed, rolling back enable.`);
-                    await this.authSource.disableAuth(authIndex, { reason: "crash_loop" });
+                    await this.authSource.disableAuth(authIndex, { reason });
                     return { restored: false, reason: "warm_failed" };
                 }
                 contextData = this.browserManager.contexts.get(authIndex);
@@ -463,19 +501,23 @@ class RequestHandler {
                 `[AutoHeal#${authIndex}]`,
                 authIndex
             );
-            // Healthy: clear crash-loop counters and keep the account enabled.
+            // Healthy: clear the failure counters and keep the account enabled.
             const state = this._getAccountRouteState(authIndex);
             state.wsDropCount = 0;
             state.wsDropWindowStart = 0;
             state.wsCrashLoopUntil = 0;
             state.crashLoopEpisodes = 0;
+            if (reason === "quota_exhausted") {
+                state.quotaDisabledUntil = 0;
+                state.quotaProbeEpisodes = 0;
+            }
             this.logger.error(`✅ [AutoHeal] Account #${authIndex} probed OK, restored to rotation.`);
             return { restored: true };
         } catch (error) {
             // Not healthy yet: keep the episode counter (already counted above),
             // re-disable and let the next probe cycle retry.
             try {
-                await this.authSource.disableAuth(authIndex, { reason: "crash_loop" });
+                await this.authSource.disableAuth(authIndex, { reason });
             } catch (e) {
                 this.logger.warn(`[AutoHeal] Re-disable #${authIndex} failed: ${e.message}`);
             }
@@ -781,6 +823,12 @@ class RequestHandler {
     _markImmediateRateLimitIfNeeded(authIndex, modelName, errorDetails) {
         if (Number(errorDetails?.status) === 429) {
             this._markAccount429ForModel(authIndex, modelName, errorDetails);
+            // Quota circuit breaker: a single upstream 429 temporarily disables the
+            // credential and routes the pool to other credentials. Fire-and-forget;
+            // the disable cleanup is single-flight per account.
+            this._quotaExhaustDisableAccount(authIndex, errorDetails).catch(error =>
+                this.logger.warn(`[Routing] Quota disable failed for account #${authIndex}: ${error.message}`)
+            );
         }
         this._autoDisableAccountForStatus(authIndex, errorDetails);
     }
@@ -832,6 +880,60 @@ class RequestHandler {
             });
         this.accountDisableCleanup?.set(authIndex, cleanupPromise);
         return true;
+    }
+
+    /**
+     * Quota circuit breaker: HTTP 429 (RESOURCE_EXHAUSTED) means the credential's
+     * Build App quota is temporarily spent. Instead of letting routing retry it
+     * forever, we temporarily disable the credential (disabledReason=quota_exhausted,
+     * persisted to the auth file), close its context and immediately switch traffic
+     * to another credential. AutoHeal re-probes it after QUOTA_EXHAUST_DISABLE_MS
+     * and restores it when it can serve again.
+     */
+    async _quotaExhaustDisableAccount(authIndex, errorDetails) {
+        if (!Number.isInteger(authIndex) || authIndex < 0) return false;
+        if (this._isAuthUnavailable(authIndex)) return false; // already disabled/expired
+        if (this.accountDisableCleanup?.has(authIndex)) return true; // single-flight
+
+        const state = this._getAccountRouteState(authIndex);
+        state.quotaDisabledUntil = Date.now() + QUOTA_EXHAUST_DISABLE_MS;
+        state.lastError = errorDetails?.message || "Upstream returned HTTP 429";
+        state.lastStatus = 429;
+        this._persistAccountRouteState();
+        this.logger.warn(
+            `[Routing] Quota 429 on account #${authIndex}: temporarily disabling for ` +
+                `${QUOTA_EXHAUST_DISABLE_MS / 60000}min and switching to another credential.`
+        );
+
+        const disableOperation = this.authSource?.isDisabled?.(authIndex)
+            ? Promise.resolve(true)
+            : Promise.resolve(this.authSource?.disableAuth?.(authIndex, { reason: "quota_exhausted", status: 429 }));
+        const cleanupPromise = disableOperation
+            .then(async changed => {
+                if (!changed) return;
+                const mutate =
+                    typeof this.browserManager?._withContextPoolMutation === "function"
+                        ? task => this.browserManager._withContextPoolMutation(task)
+                        : task => task();
+                await mutate(async () => {
+                    this.connectionRegistry?.closeMessageQueuesForAuth(authIndex, "account_quota_disabled");
+                    await this.browserManager?.closeContext?.(authIndex);
+                    this.connectionRegistry?.closeConnectionByAuth?.(authIndex);
+                    const nextAuthIndex = this._selectRequestAuthIndex([authIndex]);
+                    if (nextAuthIndex >= 0 && this.browserManager?.launchOrSwitchContext) {
+                        await this.browserManager.launchOrSwitchContext(nextAuthIndex);
+                    }
+                });
+                await this.browserManager?.rebalanceContextPool?.();
+            })
+            .catch(error =>
+                this.logger.warn(`[Routing] Quota disable cleanup failed for account #${authIndex}: ${error.message}`)
+            )
+            .finally(() => {
+                this.accountDisableCleanup?.delete(authIndex);
+            });
+        this.accountDisableCleanup?.set(authIndex, cleanupPromise);
+        return cleanupPromise;
     }
 
     getAccountRouteStatus(authIndex) {
