@@ -2581,6 +2581,9 @@
                         <div class="card-header-v2">
                             <h3 class="card-title-usage">{{ t("requestRecords") }}</h3>
                             <span class="records-order">{{ t("recentToOldest") }}</span>
+                            <span v-if="statsState.recordsTruncated" class="records-truncation-notice">
+                                {{ t("recordsShownCount", { limit: 500, total: statsState.totalRecords }) }}
+                            </span>
                         </div>
                         <div v-if="filteredRecords.length === 0" class="empty-state">
                             {{ t("noRequestRecords") }}
@@ -2897,6 +2900,8 @@ const statsState = reactive({
     accounts: [],
     records: [],
     startedAt: null,
+    totalRecords: null,
+    recordsTruncated: false,
     summary: {
         abortedCount: 0,
         activeRequests: 0,
@@ -3406,7 +3411,7 @@ const formatAccount = (authIndex, accountName) => {
     return `#${authIndex} ${accountName || "N/A"}`;
 };
 const fetchUsageStats = async () => {
-    const res = await fetch("/api/usage-stats");
+    const res = await fetch("/api/usage-stats?limit=500");
     if (res.redirected) {
         window.location.href = res.url;
         return;
@@ -3423,6 +3428,8 @@ const fetchUsageStats = async () => {
     statsState.accounts = data.accounts || [];
     statsState.records = data.records || [];
     statsState.startedAt = data.startedAt || null;
+    statsState.totalRecords = data.totalRecords ?? null;
+    statsState.recordsTruncated = data.recordsTruncated ?? false;
     statsState.summary = {
         ...statsState.summary,
         ...(data.summary || {}),
@@ -6394,6 +6401,12 @@ watchEffect(() => {
 .records-order {
     color: @text-secondary;
     font-size: 0.85rem;
+}
+
+.records-truncation-notice {
+    color: #e6a23c;
+    font-size: 0.82rem;
+    font-weight: 500;
 }
 
 .records-filters {

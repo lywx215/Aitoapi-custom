@@ -204,8 +204,12 @@ class StatusRoutes {
         });
 
         app.get("/api/usage-stats", isAuthenticated, (req, res) => {
-            const snapshot = this.serverSystem.usageStatsService?.getSnapshot();
-            res.json(snapshot || UsageStatsService.createEmptySnapshot());
+            const snapshot =
+                this.serverSystem.usageStatsService?.getSnapshot() || UsageStatsService.createEmptySnapshot();
+            // Bound the records payload so large history does not stall the web UI.
+            // The UI requests a small window (?limit=500) for display; the full
+            // history stays available via /api/usage-stats/download.
+            res.json(UsageStatsService.applyRecordsLimit(snapshot, req.query.limit));
         });
 
         app.get("/api/usage-stats/download", isAuthenticated, async (req, res) => {

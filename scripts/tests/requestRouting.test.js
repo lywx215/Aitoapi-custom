@@ -120,7 +120,9 @@ const testModel429HelperQuarantinesOnlyModel = () => {
     const { handler } = makeHandler();
     handler._markImmediateRateLimitIfNeeded(0, "gemini-3.8-flash", { message: "quota", status: 429 });
     assert.strictEqual(handler._selectRequestAuthIndex([1], "gemini-3.8-flash"), -1);
-    assert.strictEqual(handler._selectRequestAuthIndex([1], "gemini-3.7-flash"), 0);
+    // v1.2.3+: a single upstream 429 also triggers the quota circuit breaker,
+    // which disables the credential for every model until the quota window passes.
+    assert.strictEqual(handler._selectRequestAuthIndex([1], "gemini-3.7-flash"), -1);
 };
 
 const testSuccessResetsTransientFailureState = () => {

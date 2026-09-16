@@ -760,6 +760,26 @@ class UsageStatsService {
             },
         };
     }
+
+    /**
+     * Bound the records carried in a snapshot so the web dashboard never has to
+     * download the entire usage history (which can grow to tens of MB after
+     * heavy error periods). Mutates and returns the given snapshot for chaining.
+     * Records are expected newest-first (getSnapshot reverses before returning).
+     */
+    static applyRecordsLimit(snapshot, limitRaw) {
+        if (!snapshot) return snapshot;
+        const parsed = Number.parseInt(limitRaw, 10);
+        const limit = Number.isInteger(parsed) && parsed > 0 ? parsed : 500;
+        const records = snapshot.records || [];
+        snapshot.totalRecords = records.length;
+        snapshot.recordsTruncated = false;
+        if (records.length > limit) {
+            snapshot.records = records.slice(0, limit);
+            snapshot.recordsTruncated = true;
+        }
+        return snapshot;
+    }
 }
 
 module.exports = UsageStatsService;

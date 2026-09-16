@@ -227,6 +227,7 @@
     "requestOutcome": "结果",
     "requestPath": "路径",
     "requestRecords": "请求记录",
+    "recordsShownCount": "仅显示最近 {limit} 条，共 {total} 条。完整记录请下载 JSONL。",
     "requestStatus": "状态码",
     "requestSummary": "请求汇总",
     "requestTime": "时间",

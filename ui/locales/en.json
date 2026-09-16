@@ -227,6 +227,7 @@
     "requestOutcome": "Outcome",
     "requestPath": "Path",
     "requestRecords": "Request Records",
+    "recordsShownCount": "Showing latest {limit} of {total} records. Download JSONL for full history.",
     "requestStatus": "Status",
     "requestSummary": "Request Summary",
     "requestTime": "Time",
