@@ -64,8 +64,19 @@ class StatusRoutes {
         try {
             await fs.promises.rm(this.runtimeSettingsPath, { force: true });
         } catch (error) {
+            // A single-file bind mount target cannot be unlinked (EBUSY on Linux).
+            // Fall back to rewriting the mounted file in place: keep the inode so
+            // the bind mount stays valid and truncate+write the new content.
+            const handle = await fs.promises.open(this.runtimeSettingsPath, "r+");
+            try {
+                await handle.truncate(0);
+                await handle.writeFile(`${JSON.stringify(runtimeSettings, null, 2)}\n`, "utf8");
+                await handle.sync();
+            } finally {
+                await handle.close();
+            }
             await fs.promises.rm(temporaryPath, { force: true }).catch(() => {});
-            throw error;
+            return;
         }
         await fs.promises.rename(temporaryPath, this.runtimeSettingsPath);
     }
