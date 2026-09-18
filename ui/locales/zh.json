@@ -235,6 +235,8 @@
     "resetFilters": "重置筛选",
     "responseApi": "Response API",
     "retryDelayMs": "重试间隔（毫秒）",
+    "autoHealProbeIntervalMinutes": "自动恢复探测间隔（分钟）",
+    "autoHealProbeTimeoutMinutes": "单号探测超时（分钟）",
     "running": "运行中",
     "safetySettingsThreshold": "安全阈值",
     "safetySettingsThreshold.BLOCK_LOW_AND_ABOVE": "低及以上",

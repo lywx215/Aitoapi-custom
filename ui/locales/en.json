@@ -235,6 +235,8 @@
     "resetFilters": "Reset Filters",
     "responseApi": "Response API",
     "retryDelayMs": "Retry delay (ms)",
+    "autoHealProbeIntervalMinutes": "AutoHeal probe interval (min)",
+    "autoHealProbeTimeoutMinutes": "AutoHeal probe timeout (min)",
     "running": "Running",
     "safetySettingsThreshold": "Safety Threshold",
     "safetySettingsThreshold.BLOCK_LOW_AND_ABOVE": "Low and above",

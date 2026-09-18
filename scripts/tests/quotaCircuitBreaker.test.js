@@ -2,15 +2,15 @@
 // (quota circuit breaker), the pool switches to other credentials, and the AutoHeal
 // probe restores it after the quota window only if it can serve again.
 //
-// Expected behaviours covered:
+// Expected behaviours covered (v1.2.6 semantics):
 //   1. _quotaExhaustDisableAccount disables with disabledReason=quota_exhausted,
 //      closes the context, drops the account from rotation and records the window.
 //   2. Repeated 429s short-circuit (no duplicate disable / single-flight).
 //   3. _markImmediateRateLimitIfNeeded(429) triggers the breaker; non-429 does not.
-//   4. The probe skips quota-disabled accounts still inside their window and any
-//      account that exhausted QUOTA_PROBE_MAX_EPISODES.
+//   4. The probe skips quota-disabled accounts still inside their window; accounts
+//      that failed many probes are STILL probed (probing never gives up).
 //   5. Once the window elapsed, a healthy account is restored and counters reset.
-//   6. A failed warm-up rolls the account back to disabled and costs one episode.
+//   6. A failed isolated probe keeps the account disabled and costs one episode.
 //
 // The auth mock mirrors AuthSource's real public surface (getStatusMetadata exists,
 // getAccountStatus does not). Run from the repo root; the handler's route-state is
@@ -70,12 +70,11 @@ const mockBrowserManager = {
     closeContext: async i => {
         mockBrowserManager.contexts.delete(i);
     },
-    ensureContextForAuth: async i => {
-        if (i === 68) return false; // simulated warm-up failure
-        mockBrowserManager.contexts.set(i, { page: { isClosed: () => false } });
+    // v1.2.6: the probe uses an ISOLATED throwaway browser instead of the pool.
+    probeAccountIsolated: async i => {
+        if (i === 68) throw new Error("WebSocket not initialized within 600s"); // simulated probe failure
         return true;
     },
-    _checkPageStatusAndErrors: async () => {},
     replaceContextForAuth: async () => true,
     rebalanceContextPool: async () => {},
     launchOrSwitchContext: async () => true,
@@ -181,24 +180,23 @@ async function main() {
             "a 503 must not trip the quota breaker (only 401/403 auto-disable applies)"
         );
 
-        // ---- 4. probe skips accounts still in the window or past max episodes ----
+        // ---- 4. probe skips in-window accounts; over-probed accounts are STILL probed ----
         await mockAuthSource.disableAuth(73, { reason: "quota_exhausted", status: 429 });
         rh._getAccountRouteState(73).quotaDisabledUntil = Date.now() + 1200000; // in-window
         rh._getAccountRouteState(73).quotaProbeEpisodes = 0;
 
         await mockAuthSource.disableAuth(74, { reason: "quota_exhausted", status: 429 });
         rh._getAccountRouteState(74).quotaDisabledUntil = 0; // window elapsed
-        rh._getAccountRouteState(74).quotaProbeEpisodes = 3; // QUOTA_PROBE_MAX_EPISODES
+        rh._getAccountRouteState(74).quotaProbeEpisodes = 3; // past the old max — still probed (never give up)
 
         const enablesBefore = mockAuthSource.enableCalls;
         await rh._runAutoHealProbe();
         assert.strictEqual(
             mockAuthSource.enableCalls,
-            enablesBefore,
-            "probe must skip in-window and max-episode accounts"
+            enablesBefore + 1, // #74 was probed (and restored by the mock), only the window skip applied to #73
+            "window-elapsed accounts must be probed regardless of past failed episodes"
         );
         assert.strictEqual(mockAuthSource.isDisabled(73), true, "in-window account stays disabled");
-        assert.strictEqual(mockAuthSource.isDisabled(74), true, "over-probed account stays disabled for human review");
 
         // ---- 5. healthy account is restored once the window elapsed ----
         await mockAuthSource.disableAuth(69, { reason: "quota_exhausted", status: 429 });
@@ -216,15 +214,19 @@ async function main() {
         assert.strictEqual(state69.quotaProbeEpisodes, 0, "successful probe must clear probe episodes");
         assert.strictEqual(state69.quotaDisabledUntil, 0, "successful probe must clear the quota window");
 
-        // ---- 6. failed warm-up rolls the account back to disabled and costs one episode ----
+        // ---- 6. failed isolated probe keeps the account disabled and costs one episode ----
         await mockAuthSource.disableAuth(68, { reason: "quota_exhausted", status: 429 });
         rh._getAccountRouteState(68).quotaDisabledUntil = 0;
         rh._getAccountRouteState(68).quotaProbeEpisodes = 0;
 
         const result = await rh._probeAndRestoreAccount(68, "quota_exhausted");
-        assert.strictEqual(result.restored, false, "a failed warm-up must not restore the account");
-        assert.strictEqual(result.reason, "warm_failed", "warm-up failure must be reported as warm_failed");
-        assert.strictEqual(mockAuthSource.isDisabled(68), true, "failed probe must roll back to disabled");
+        assert.strictEqual(result.restored, false, "a failed probe must not restore the account");
+        assert.strictEqual(
+            result.reason,
+            "WebSocket not initialized within 600s",
+            "probe failure must surface the underlying error"
+        );
+        assert.strictEqual(mockAuthSource.isDisabled(68), true, "failed probe must keep the account disabled");
         assert.strictEqual(
             mockAuthSource.getStatusMetadata(68).disabledReason,
             "quota_exhausted",

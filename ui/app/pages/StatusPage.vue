@@ -1335,6 +1335,38 @@
                                     @change="handleRetryDelayChange"
                                 />
                             </div>
+                            <div class="switch-container">
+                                <span class="label"
+                                    ><span
+                                        >{{ t("autoHealProbeIntervalMinutes")
+                                        }}<EnvVarTooltip env-var="AUTOHEAL_PROBE_INTERVAL_MS" doc-section="proxy-config"
+                                    /></span>
+                                </span>
+                                <el-input-number
+                                    v-model="state.autoHealProbeIntervalMinutes"
+                                    :min="1"
+                                    :max="10080"
+                                    :step="1"
+                                    controls-position="right"
+                                    @change="handleAutoHealProbeChange"
+                                />
+                            </div>
+                            <div class="switch-container">
+                                <span class="label"
+                                    ><span
+                                        >{{ t("autoHealProbeTimeoutMinutes")
+                                        }}<EnvVarTooltip env-var="AUTOHEAL_PROBE_TIMEOUT_MS" doc-section="proxy-config"
+                                    /></span>
+                                </span>
+                                <el-input-number
+                                    v-model="state.autoHealProbeTimeoutMinutes"
+                                    :min="1"
+                                    :max="60"
+                                    :step="1"
+                                    controls-position="right"
+                                    @change="handleAutoHealProbeChange"
+                                />
+                            </div>
                             <div class="switch-container auto-disable-setting">
                                 <span class="label"
                                     ><span
@@ -3650,6 +3682,8 @@ const state = reactive({
     activeContextsCount: 0,
     apiKeySource: "",
     autoDisableStatusCodes: [401, 403],
+    autoHealProbeIntervalMinutes: 300,
+    autoHealProbeTimeoutMinutes: 10,
     browserConnected: false,
     checkUpdateEnabled: true,
     currentAuthIndex: -1,
@@ -4204,6 +4238,29 @@ const handleMaxContextsChange = value => handleNumericSettingChange("/api/settin
 
 const handleMaxRetriesChange = value => handleNumericSettingChange("/api/settings/max-retries", "maxRetries", value);
 const handleRetryDelayChange = value => handleNumericSettingChange("/api/settings/retry-delay", "retryDelay", value);
+const handleAutoHealProbeChange = async () => {
+    try {
+        const res = await fetch("/api/settings/autoheal-probe", {
+            body: JSON.stringify({
+                probeIntervalMs: (state.autoHealProbeIntervalMinutes ?? 300) * 60000,
+                probeTimeoutMs: (state.autoHealProbeTimeoutMinutes ?? 10) * 60000,
+            }),
+            headers: { "Content-Type": "application/json" },
+            method: "PUT",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        ElMessage.success(
+            t("settingUpdateSuccess", {
+                setting: t("autoHealProbeIntervalMinutes"),
+                value: `${state.autoHealProbeIntervalMinutes} min`,
+            })
+        );
+    } catch (error) {
+        ElMessage.error(t("settingFailed", { message: error.message }));
+        await updateContent();
+    }
+};
 const handleAutoDisableStatusCodesChange = async values => {
     const parsed = [...new Set((values || []).map(value => Number(value)).filter(value => Number.isInteger(value)))];
     try {
@@ -4519,6 +4576,8 @@ const updateStatus = data => {
     state.accountCooldownMaxMs = data.status.accountCooldownMaxMs ?? 1800000;
     state.accountCooldownMs = data.status.accountCooldownMs ?? 300000;
     state.autoDisableStatusCodes = data.status.autoDisableStatusCodes || [401, 403];
+    state.autoHealProbeIntervalMinutes = Math.round((data.status.autoHealProbeIntervalMs ?? 18000000) / 60000);
+    state.autoHealProbeTimeoutMinutes = Math.round((data.status.autoHealProbeTimeoutMs ?? 600000) / 60000);
     state.maxContexts = data.status.maxContexts ?? 1;
     state.maxRetries = data.status.maxRetries ?? 3;
     state.retryDelay = data.status.retryDelay ?? 2000;

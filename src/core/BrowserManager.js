@@ -851,6 +851,75 @@ class BrowserManager {
     }
 
     /**
+     * AutoHeal isolated probe (v1.2.6): launch a THROWAWAY browser that is fully
+     * separate from the main browser and the MAX_CONTEXTS pool, load the account's
+     * storage state, open the target page and wait for the in-page WebSocket to
+     * initialize. Resolves true when the account can serve again; throws a
+     * classified error otherwise. The browser is always closed in the end, so a
+     * probe never evicts or blocks a busy production context.
+     */
+    async probeAccountIsolated(authIndex, timeoutMs = 600000) {
+        if (!Number.isInteger(authIndex) || authIndex < 0) throw new Error("Invalid authIndex for probe");
+        const storageStateObject = this.authSource.getAuth(authIndex);
+        if (!storageStateObject) throw new Error("Auth source unreadable");
+
+        const executablePath = this._getBrowserExecutablePath();
+        if (!fs.existsSync(executablePath)) throw new Error("Browser executable not found");
+        const proxyConfig = parseProxyFromEnv();
+        const logPrefix = `[AutoHealProbe#${authIndex}]`;
+        const browser = await firefox.launch({
+            args: this.launchArgs,
+            executablePath,
+            firefoxUserPrefs: this.firefoxUserPrefs,
+            headless: true,
+            ...(proxyConfig ? { proxy: proxyConfig } : {}),
+        });
+        this.logger.info(`${logPrefix} Isolated probe browser launched (not part of MAX_CONTEXTS).`);
+        try {
+            const context = await browser.newContext({
+                deviceScaleFactor: 1,
+                storageState: storageStateObject,
+                viewport: { height: 1080, width: 1920 },
+                ...(proxyConfig ? { proxy: proxyConfig } : {}),
+            });
+            await context.addInitScript(this._getPrivacyProtectionScript(authIndex));
+            const page = await context.newPage();
+            let wsSuccess = false;
+            let wsFailed = false;
+            page.on("console", msg => {
+                const text = msg.text();
+                if (text.includes("Connection successful")) wsSuccess = true;
+                if (text.includes("WebSocket initialization failed")) wsFailed = true;
+            });
+
+            await page.goto(this.targetUrl, { timeout: 180000, waitUntil: "domcontentloaded" });
+            // Reuses the production classification: sign-in page => expired,
+            // 403/Forbidden page => disableAuth(forbidden), region block, etc.
+            await this._checkPageStatusAndErrors(page, logPrefix, authIndex);
+
+            const deadline = Date.now() + timeoutMs;
+            while (Date.now() < deadline) {
+                if (wsSuccess) break;
+                if (wsFailed) throw new Error("WebSocket initialization failed (in-page failure signal)");
+                if (page.isClosed()) throw new Error("Probe page closed unexpectedly");
+                await page.waitForTimeout(1000);
+            }
+            if (!wsSuccess) {
+                throw new Error(`WebSocket not initialized within ${Math.round(timeoutMs / 1000)}s`);
+            }
+            this.logger.info(`${logPrefix} ✅ Isolated probe passed (page + WebSocket healthy).`);
+            return true;
+        } finally {
+            try {
+                await browser.close();
+                this.logger.info(`${logPrefix} Isolated probe browser closed.`);
+            } catch (e) {
+                this.logger.warn(`${logPrefix} Isolated probe browser close failed: ${e.message}`);
+            }
+        }
+    }
+
+    /**
      * Helper: Verify navigation to correct page and retry if needed
      * Throws error on failure, which will be caught by the caller's try-catch block
      * @param {string} logPrefix - Log prefix for messages (e.g., "[Browser]" or "[Reconnect]")

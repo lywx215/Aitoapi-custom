@@ -25,6 +25,8 @@ class ConfigLoader {
             apiKeys: [],
             apiKeySource: "Not set",
             autoDisableStatusCodes: [401, 403],
+            autoHealProbeIntervalMs: 5 * 60 * 60 * 1000,
+            autoHealProbeTimeoutMs: 10 * 60 * 1000,
             browserExecutablePath: null,
             checkUpdate: true,
             enableAuthUpdate: true,
@@ -251,6 +253,13 @@ class ConfigLoader {
             }
             if (config.accountCooldownMaxMs < config.accountCooldownMs) {
                 config.accountCooldownMaxMs = config.accountCooldownMs;
+            }
+            // AutoHeal probe schedule (v1.2.6): interval + per-account probe timeout.
+            if (isIntegerInRange(raw.autoHealProbeIntervalMs, 60000, 604800000)) {
+                config.autoHealProbeIntervalMs = raw.autoHealProbeIntervalMs;
+            }
+            if (isIntegerInRange(raw.autoHealProbeTimeoutMs, 30000, 3600000)) {
+                config.autoHealProbeTimeoutMs = raw.autoHealProbeTimeoutMs;
             }
             this.logger.info(`[Config] Applied runtime settings from ${runtimeSettingsPath}.`);
         } catch (error) {

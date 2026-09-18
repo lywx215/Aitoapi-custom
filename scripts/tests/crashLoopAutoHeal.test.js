@@ -58,12 +58,11 @@ const mockBrowserManager = {
     closeContext: async i => {
         mockBrowserManager.contexts.delete(i);
     },
-    ensureContextForAuth: async i => {
-        if (i === 68) return false; // simulated warm-up failure
-        mockBrowserManager.contexts.set(i, { page: { isClosed: () => false } });
+    // v1.2.6: the probe uses an ISOLATED throwaway browser instead of the pool.
+    probeAccountIsolated: async i => {
+        if (i === 68) throw new Error("WebSocket not initialized within 600s"); // simulated probe failure
         return true;
     },
-    _checkPageStatusAndErrors: async () => {},
     replaceContextForAuth: async () => true,
     rebalanceContextPool: async () => {},
 };
@@ -128,22 +127,28 @@ async function main() {
         "auto-disabled account must leave the rotation"
     );
 
-    // ---- 3. probe skips quarantined and over-probed accounts ----
+    // ---- 3. probe skips still-quarantined accounts; over-probed accounts are STILL probed ----
     await mockAuthSource.disableAuth(68, { reason: "crash_loop" });
     const exhausted = rh._getAccountRouteState(68);
-    exhausted.crashLoopEpisodes = 3; // WS_CRASH_MAX_EPISODES
+    exhausted.crashLoopEpisodes = 3; // past the old WS_CRASH_MAX_EPISODES — still probed (never give up)
     exhausted.wsCrashLoopUntil = 0;
 
     // #70 is disabled as crash_loop but still inside its quarantine window.
     const enablesBefore = mockAuthSource.enableCalls;
     await rh._runAutoHealProbe();
+    // #68's window elapsed so it WAS probed (never give up) — but the mock probe
+    // fails for #68, so it stays disabled and costs one more episode (3 -> 4).
     assert.strictEqual(
         mockAuthSource.enableCalls,
         enablesBefore,
-        "probe must skip a still-quarantined account and an account that exhausted its episodes"
+        "a failed probe must not enable the account"
+    );
+    assert.strictEqual(
+        rh._getAccountRouteState(68).crashLoopEpisodes,
+        4,
+        "over-probed account must STILL be probed (episode incremented) — probing never gives up"
     );
     assert.strictEqual(mockAuthSource.isDisabled(70), true, "quarantined account stays disabled");
-    assert.strictEqual(mockAuthSource.isDisabled(68), true, "over-probed account stays disabled for human review");
 
     // ---- 4. probe restores a healthy account once the quarantine window elapsed ----
     rh._getAccountRouteState(70).wsCrashLoopUntil = 0;
@@ -159,15 +164,19 @@ async function main() {
     assert.strictEqual(state.crashLoopEpisodes, 0, "successful probe must clear the episode counter");
     assert.strictEqual(state.wsDropCount, 0, "successful probe must clear the drop counter");
 
-    // ---- 5. failed warm-up rolls the account back to disabled ----
+    // ---- 5. failed isolated probe rolls the account back to disabled ----
     const retry = rh._getAccountRouteState(68);
-    retry.crashLoopEpisodes = 0; // allow one more attempt
+    retry.crashLoopEpisodes = 0;
     retry.wsCrashLoopUntil = 0;
     await mockAuthSource.disableAuth(68, { reason: "crash_loop" });
 
     const result = await rh._probeAndRestoreAccount(68);
-    assert.strictEqual(result.restored, false, "a failed warm-up must not restore the account");
-    assert.strictEqual(result.reason, "warm_failed", "warm-up failure must be reported as warm_failed");
+    assert.strictEqual(result.restored, false, "a failed probe must not restore the account");
+    assert.strictEqual(
+        result.reason,
+        "WebSocket not initialized within 600s",
+        "probe failure must surface the underlying error"
+    );
     assert.strictEqual(mockAuthSource.isDisabled(68), true, "failed probe must roll the account back to disabled");
     assert.strictEqual(
         rh._getAccountRouteState(68).crashLoopEpisodes,

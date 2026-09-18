@@ -50,6 +50,8 @@ class StatusRoutes {
             accountCooldownMaxMs: this.config.accountCooldownMaxMs,
             accountCooldownMs: this.config.accountCooldownMs,
             autoDisableStatusCodes: this.config.autoDisableStatusCodes,
+            autoHealProbeIntervalMs: this.config.autoHealProbeIntervalMs,
+            autoHealProbeTimeoutMs: this.config.autoHealProbeTimeoutMs,
             maxContexts: this.config.maxContexts,
             maxRetries: this.config.maxRetries,
             retryDelay: this.config.retryDelay,
@@ -1004,6 +1006,35 @@ class StatusRoutes {
             updateNumericSetting(req, res, "accountCooldownMaxMs", { max: 604800000, min: 1000 })
         );
 
+        // AutoHeal probe schedule (v1.2.6): runtime-adjustable interval/timeout.
+        // Changing the interval re-arms the probe timer immediately.
+        app.put("/api/settings/autoheal-probe", isAuthenticated, async (req, res) => {
+            const intervalMs = Number(req.body?.probeIntervalMs);
+            const timeoutMs = Number(req.body?.probeTimeoutMs);
+            if (!Number.isInteger(intervalMs) || intervalMs < 60000 || intervalMs > 604800000) {
+                return res.status(400).json({ error: "probeIntervalMs must be 60000..604800000", message: "settingFailed" });
+            }
+            if (!Number.isInteger(timeoutMs) || timeoutMs < 30000 || timeoutMs > 3600000) {
+                return res.status(400).json({ error: "probeTimeoutMs must be 30000..3600000", message: "settingFailed" });
+            }
+            this.config.autoHealProbeIntervalMs = intervalMs;
+            this.config.autoHealProbeTimeoutMs = timeoutMs;
+            try {
+                await this._saveRuntimeSettings();
+                this.serverSystem.requestHandler._startAutoHealTimer();
+                this.logger.info(
+                    `[WebUI] AutoHeal probe updated: interval=${intervalMs}ms, timeout=${timeoutMs}ms (timer re-armed).`
+                );
+                return res.status(200).json({
+                    message: "settingUpdateSuccess",
+                    setting: "autoheal-probe",
+                    value: { probeIntervalMs: intervalMs, probeTimeoutMs: timeoutMs },
+                });
+            } catch (error) {
+                return res.status(500).json({ error: error.message, message: "settingFailed" });
+            }
+        });
+
         app.post("/api/files", isAuthenticated, async (req, res) => {
             if (this._rejectIfSystemBusy(res)) return;
 
@@ -1228,6 +1259,8 @@ class StatusRoutes {
 
                 apiKeySource: config.apiKeySource,
                 autoDisableStatusCodes: config.autoDisableStatusCodes,
+                autoHealProbeIntervalMs: config.autoHealProbeIntervalMs,
+                autoHealProbeTimeoutMs: config.autoHealProbeTimeoutMs,
                 browserConnected: !!this.serverSystem.connectionRegistry.getConnectionByAuth(currentAuthIndex, false),
                 checkUpdate: config.checkUpdate,
                 currentAccountName,
