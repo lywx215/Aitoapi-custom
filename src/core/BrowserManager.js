@@ -898,11 +898,47 @@ class BrowserManager {
             await this._checkPageStatusAndErrors(page, logPrefix, authIndex);
 
             const deadline = Date.now() + timeoutMs;
+            let probeIter = 0;
             while (Date.now() < deadline) {
                 if (wsSuccess) break;
                 if (wsFailed) throw new Error("WebSocket initialization failed (in-page failure signal)");
                 if (page.isClosed()) throw new Error("Probe page closed unexpectedly");
-                await page.waitForTimeout(1000);
+                // v1.2.7 fix: a fresh probe page sits behind the SAME popups the
+                // production path handles in its wait loop (BrowserManager.js
+                // ~372-439): the "This app is from another developer" trust
+                // dialog ("Continue to the app"), the "Skip" dialog, and the
+                // Launch (rocket) interaction. Without clicking these the
+                // in-page WebSocket NEVER initializes and every probe timed
+                // out regardless of account health (2026-09-19 incident).
+                const continueClicked = await this._clickButtonByTextIfVisible(
+                    page, "Continue to the app", logPrefix, `popup "Continue to the app"`
+                );
+                if (continueClicked) {
+                    this.logger.info(`${logPrefix} Found "Continue to the app" popup, clicked.`);
+                }
+                const skipClicked = await this._clickButtonByTextIfVisible(page, "Skip", logPrefix, `popup "Skip"`);
+                if (skipClicked) {
+                    this.logger.info(`${logPrefix} Found "Skip" popup, clicked.`);
+                }
+                if (probeIter % 5 === 0) {
+                    await this._clickLaunchButtonIfVisible(page, logPrefix);
+                }
+                probeIter++;
+                if (probeIter % 20 === 0) {
+                    // Diagnostics (2026-09-19): all probes timed out with zero
+                    // visibility into what the page actually shows. Log state
+                    // every ~30s so a misclassified page is diagnosable.
+                    try {
+                        const diagUrl = page.url();
+                        const diagTitle = await page.title();
+                        this.logger.info(
+                            `${logPrefix} [diag] iter=${probeIter} url=${diagUrl.slice(0, 140)} title="${diagTitle.slice(0, 80)}"`
+                        );
+                    } catch (e) {
+                        this.logger.warn(`${logPrefix} [diag] failed: ${e.message}`);
+                    }
+                }
+                await page.waitForTimeout(1500);
             }
             if (!wsSuccess) {
                 throw new Error(`WebSocket not initialized within ${Math.round(timeoutMs / 1000)}s`);
