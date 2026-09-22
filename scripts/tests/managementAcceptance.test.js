@@ -130,6 +130,16 @@ test("C02 OpenAPI limits, schemas, errors and token scope templates", () => {
     assert.equal(schemas.BatchRequest.properties.accountIds.maxItems, 100);
     assert.equal(schemas.TestRequest.properties.mode.default, "model");
     assert.equal(schemas.TestRequest.properties.model.default, "gemini-3.8-flash");
+    for (const name of ["ImportRequest", "TestRequest"]) {
+        const model = schemas[name].properties.model;
+        assert.equal(model.minLength, 1);
+        assert.equal(model.maxLength, 128);
+        assert.equal(model.pattern, "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$");
+    }
+    const importItems = schemas.ImportRequest.properties.items;
+    assert.equal(importItems.items.properties.clientRef.minLength, 1);
+    assert.equal(importItems.items.properties.clientRef.maxLength, 128);
+    assert.equal(importItems["x-unique-by"], "clientRef");
     assert.equal(schemas.Credentials.additionalProperties, false);
     assert.deepEqual(Object.keys(schemas.Credentials.properties).sort(), ["accountName", "cookies", "origins"]);
     for (const name of [

@@ -28,6 +28,8 @@
 
 请求体最大 10 MiB，每份凭证序列化后最大 1 MiB，批量最多 100 项。凭证只允许 `accountName`、`cookies`、`origins`；支持对象或旧 JSON 字符串，解析后执行相同校验。此 OpenAPI 选择拒绝 `disabled`、`expired`、`accountId`、版本等控制字段。数组/JSON 字符串的字节限制需要运行时校验，OpenAPI 的 `x-max-json-bytes` 不是普通 JSON Schema 关键字。
 
+导入项 `clientRef` 必须非空、最多 128 字符且同一 batch 内唯一。import/test 的 `model` 最多 128 字符，精确匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`。这些校验在 admission 阶段完成：非法输入直接 HTTP 400，不创建或排队任务，不写入账户状态。`x-unique-by: clientRef` 是文档扩展，批内唯一性仍需运行时校验；最终验收会检查拒绝请求前后的任务和账户状态均不变。
+
 ## 路由与权限
 
 以下路径均相对 `/api/manage/v1`。`202` 表示持久化任务提交，必须带 `Idempotency-Key`。`200` 表示同步结果。
