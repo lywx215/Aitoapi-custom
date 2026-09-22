@@ -194,6 +194,7 @@ class AuthRoutes {
                         return res.redirect("/login?error=1");
                     }
                     req.session.isAuthenticated = true;
+                    req.session.authMethod = expectedPassword ? "console_password" : "model_key";
                     this.logger.info(`[Auth] Successful login from IP: ${ip}`);
                     res.redirect("/");
                 });
