@@ -33,7 +33,7 @@ class WebRoutes {
     /**
      * Configure session and login related middleware
      */
-    setupSession(app) {
+    setupSession(app, { registerRoutes = true } = {}) {
         // Generate a secure random session secret
         const sessionSecret = crypto.randomBytes(32).toString("hex");
 
@@ -58,6 +58,10 @@ class WebRoutes {
         });
         app.use(this.sessionParser);
 
+        if (registerRoutes) this.setupRoutes(app);
+    }
+
+    setupRoutes(app) {
         // Setup all route handlers
         this.authRoutes.setupRoutes(app);
         this.statusRoutes.setupRoutes(app, this.authRoutes.isAuthenticated.bind(this.authRoutes));

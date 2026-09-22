@@ -24,6 +24,13 @@ const UsageStatsService = require("./UsageStatsService");
 const ConfigLoader = require("../utils/ConfigLoader");
 const WebRoutes = require("../routes/WebRoutes");
 const FormatConverter = require("./FormatConverter");
+const ManagementKeyStore = require("../management/ManagementKeyStore");
+const ManagementTaskService = require("../management/ManagementTaskService");
+const ManagementAccountService = require("../management/ManagementAccountService");
+const ManagementVerifier = require("../management/ManagementVerifier");
+const ManagementRoutes = require("../routes/ManagementRoutes");
+const ManagementKeyRoutes = require("../routes/ManagementKeyRoutes");
+const ManagementRuntime = require("../management/ManagementRuntime");
 
 /**
  * Proxy Server System
@@ -118,6 +125,24 @@ class ProxyServerSystem extends EventEmitter {
         this.httpServer = null;
         this.wsServer = null;
         this.webRoutes = new WebRoutes(this);
+        this.managementRuntime = new ManagementRuntime(this);
+        this.managementKeyStore = new ManagementKeyStore({ logger: this.logger });
+        this.managementTaskService = new ManagementTaskService({
+            keyStore: this.managementKeyStore,
+            logger: this.logger,
+        });
+        this.managementVerifier = new ManagementVerifier(this);
+        this.managementAccountService = new ManagementAccountService(this, {
+            keyStore: this.managementKeyStore,
+            taskService: this.managementTaskService,
+            verifier: this.managementVerifier,
+        });
+        this.managementRoutes = new ManagementRoutes(this, {
+            accountService: this.managementAccountService,
+            keyStore: this.managementKeyStore,
+            taskService: this.managementTaskService,
+        });
+        this.managementKeyRoutes = new ManagementKeyRoutes(this, { keyStore: this.managementKeyStore });
     }
 
     async start(initialAuthIndex = null) {
@@ -145,6 +170,7 @@ class ProxyServerSystem extends EventEmitter {
 
         if (allAvailableIndices.length === 0) {
             this.logger.warn("[System] No available authentication source. Starting in account binding mode.");
+            await this.managementTaskService.start();
             this.emit("started");
             return; // Exit early
         }
@@ -186,19 +212,20 @@ class ProxyServerSystem extends EventEmitter {
 
             if (firstReady === null) {
                 this.logger.error("[System] Failed to initialize any context!");
-                this.emit("started");
-                return;
+            } else {
+                // Activate first ready context (fast switch since already preloaded)
+                await this.browserManager.launchOrSwitchContext(firstReady);
+                this.logger.info(`[System] ✅ Successfully activated account #${firstReady}!`);
             }
-
-            // Activate first ready context (fast switch since already preloaded)
-            await this.browserManager.launchOrSwitchContext(firstReady);
-            this.logger.info(`[System] ✅ Successfully activated account #${firstReady}!`);
         } catch (error) {
             this.logger.error(`[System] ❌ Startup failed: ${error.message}`);
         } finally {
             this.requestHandler.authSwitcher.isSystemBusy = false;
         }
 
+        // Resume durable management writes only after the startup pool mutation
+        // has finished, including the failed-startup/account-binding case.
+        await this.managementTaskService.start();
         this.emit("started");
     }
 
@@ -382,7 +409,35 @@ class ProxyServerSystem extends EventEmitter {
             next();
         });
 
-        // CORS middleware
+        // Management namespaces own authentication, bounded parsing and terminal
+        // errors. Never pass their requests to the model proxy fallback.
+        app.use((req, res, next) => {
+            let normalized;
+            try {
+                normalized = new URL(decodeURIComponent(req.path).replace(/\/{2,}/g, "/"), "http://local").pathname;
+            } catch {
+                normalized = req.path;
+            }
+            const managed = /^\/api\/(?:manage|management-keys)(?:\/|$)/i.test(normalized);
+            if (managed && normalized !== req.path) {
+                return res.status(400).json({
+                    error: { code: "INVALID_REQUEST", message: "Use the canonical management API path." },
+                    requestId: require("crypto").randomUUID(),
+                });
+            }
+            next();
+        });
+        this.webRoutes.setupSession(app, { registerRoutes: false });
+        app.use("/api/management-keys", this.managementKeyRoutes.createRouter());
+        app.use("/api/manage/v1", this.managementRoutes.createRouter());
+        app.use("/api/manage", (req, res) =>
+            res.status(404).json({
+                error: { code: "NOT_FOUND", message: "Management API version or route not found." },
+                requestId: require("crypto").randomUUID(),
+            })
+        );
+
+        // CORS middleware (legacy/model interfaces only)
         app.use((req, res, next) => {
             res.header("Access-Control-Allow-Origin", "*");
             res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
@@ -465,7 +520,13 @@ class ProxyServerSystem extends EventEmitter {
         app.use("/locales", express.static(path.join(__dirname, "..", "..", "ui", "locales")));
 
         // Setup session and all routes (auth, status, and auth creation)
-        this.webRoutes.setupSession(app);
+        this.webRoutes.setupRoutes(app);
+
+        // Legacy console namespaces are local too; a typo or wrong HTTP verb
+        // must not accidentally become a Google request after model-key auth.
+        app.use(/^\/(?:api\/(?:accounts|settings|auth|files|status|usage-stats)|login|logout)(?:\/|$)/i, (req, res) =>
+            res.status(404).json({ error: "NOT_FOUND", message: "Management route or method not found." })
+        );
 
         // API authentication middleware
         app.use(this._createAuthMiddleware());
@@ -629,6 +690,14 @@ class ProxyServerSystem extends EventEmitter {
      */
     async shutdown() {
         this.logger.info("[System] Shutting down server system...");
+        const managementCleanup = await Promise.allSettled([
+            Promise.resolve().then(() => this.managementTaskService?.close()),
+            Promise.resolve().then(() => this.managementVerifier?.close()),
+        ]);
+        for (const result of managementCleanup) {
+            if (result.status === "rejected")
+                this.logger.error("[Management] Shutdown cleanup incomplete; interrupted tasks require review.");
+        }
 
         // Clear stale queue cleanup interval
         if (this.staleQueueCleanupInterval) {

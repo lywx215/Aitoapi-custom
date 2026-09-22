@@ -862,6 +862,13 @@ class BrowserManager {
         if (!Number.isInteger(authIndex) || authIndex < 0) throw new Error("Invalid authIndex for probe");
         const storageStateObject = this.authSource.getAuth(authIndex);
         if (!storageStateObject) throw new Error("Auth source unreadable");
+        const metadata = this.authSource.store?.getMetadata(authIndex);
+        const expectedVersions = metadata
+            ? {
+                  expectedCredentialVersion: metadata.credentialVersion,
+                  expectedStateVersion: metadata.stateVersion,
+              }
+            : {};
 
         const executablePath = this._getBrowserExecutablePath();
         if (!fs.existsSync(executablePath)) throw new Error("Browser executable not found");
@@ -895,7 +902,7 @@ class BrowserManager {
             await page.goto(this.targetUrl, { timeout: 180000, waitUntil: "domcontentloaded" });
             // Reuses the production classification: sign-in page => expired,
             // 403/Forbidden page => disableAuth(forbidden), region block, etc.
-            await this._checkPageStatusAndErrors(page, logPrefix, authIndex);
+            await this._checkPageStatusAndErrors(page, logPrefix, authIndex, expectedVersions);
 
             const deadline = Date.now() + timeoutMs;
             let probeIter = 0;
@@ -1009,7 +1016,7 @@ class BrowserManager {
      * @param {number} authIndex - The auth index being checked (default: -1). When >= 0 and a login redirect is detected, this method will await this.authSource.markAsExpired(authIndex) to mark the auth as expired.
      * @throws {Error} If any error condition is detected
      */
-    async _checkPageStatusAndErrors(page, logPrefix = "[Browser]", authIndex = -1) {
+    async _checkPageStatusAndErrors(page, logPrefix = "[Browser]", authIndex = -1, expectedVersions = {}) {
         const currentUrl = page.url();
         let pageTitle = "";
         try {
@@ -1030,7 +1037,7 @@ class BrowserManager {
         ) {
             // Mark auth as expired if authIndex is provided
             if (authIndex >= 0 && this.authSource) {
-                await this.authSource.markAsExpired(authIndex);
+                await this.authSource.markAsExpired(authIndex, expectedVersions);
             }
             throw new AuthExpiredError();
         }
@@ -1043,7 +1050,7 @@ class BrowserManager {
 
         if (pageTitle.includes("403") || pageTitle.includes("Forbidden")) {
             if (authIndex >= 0 && this.authSource?.disableAuth && this.config?.autoDisableStatusCodes?.includes(403)) {
-                await this.authSource.disableAuth(authIndex, { reason: "forbidden", status: 403 });
+                await this.authSource.disableAuth(authIndex, { reason: "forbidden", status: 403 }, expectedVersions);
             }
             const error = new Error(
                 "🚨 403 Forbidden: Account does not have permission to access the upstream service."
@@ -2461,6 +2468,17 @@ class BrowserManager {
 
             // Final check before adding to contexts map
             this._throwIfContextInitAborted(authIndex, isBackgroundTask);
+            if (this.authSource.store) {
+                const current = this.authSource.store.getMetadata(authIndex);
+                if (
+                    !current ||
+                    current.archived ||
+                    current.disabled ||
+                    current.credentialVersion !== credentialVersion
+                ) {
+                    throw new Error("Credential changed while browser context was initializing.");
+                }
+            }
 
             // Save to contexts map - with atomic abort check to prevent race condition
             // between the check above and actually adding to the map
