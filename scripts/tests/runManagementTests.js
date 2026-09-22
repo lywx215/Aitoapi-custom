@@ -7,6 +7,7 @@ const tests = [
     "runtimeSettingsSave",
     "managementStorageIntegration",
     "managementRuntime",
+    "managementStartup",
     "managementKeys",
     "managementTasks",
     "managementRoutes",
