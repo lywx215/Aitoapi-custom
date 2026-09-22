@@ -10,6 +10,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const CredentialStore = require("../../src/storage/CredentialStore");
 
 // Load environment variables from .env file
 require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
@@ -231,31 +232,6 @@ const ensureDirectoryExists = dirPath => {
         );
         fs.mkdirSync(dirPath);
     }
-};
-
-/**
- * Gets the next available authentication file index from the 'configs/auth' directory.
- * Always uses max existing index + 1 to ensure new auth is always the latest.
- * This simplifies dedup logic assumption: higher index = newer auth.
- * @returns {number} - The next available index value.
- */
-const getNextAuthIndex = () => {
-    const projectRoot = path.join(__dirname, "..", "..");
-    const directory = path.join(projectRoot, CONFIG_DIR);
-
-    if (!fs.existsSync(directory)) {
-        return 0;
-    }
-
-    // Find max existing index and use max + 1
-    const files = fs.readdirSync(directory);
-    const authFiles = files.filter(file => /^auth-\d+\.json$/.test(file));
-    if (authFiles.length === 0) {
-        return 0;
-    }
-
-    const indices = authFiles.map(file => parseInt(file.match(/^auth-(\d+)\.json$/)[1], 10));
-    return Math.max(...indices) + 1;
 };
 
 const closeBrowserSafely = async browser => {
@@ -850,13 +826,10 @@ const autoFillRecoveryEmailIfRequired = async (page, recoveryEmail, randomWait) 
     const configDirPath = path.join(projectRoot, CONFIG_DIR);
     ensureDirectoryExists(configDirPath);
 
-    const newIndex = getNextAuthIndex();
-    const authFileName = `auth-${newIndex}.json`;
-
     console.log(
         getText(
-            `▶️  正在准备为账号 #${newIndex} 创建新的认证文件...`,
-            `▶️  Preparing to create new authentication file for account #${newIndex}...`
+            "▶️  正在准备新的认证文件。离线保存前请停止服务；在线导入请使用管理 API。",
+            "▶️  Preparing credentials. Stop the service before offline saving; use management API for online imports."
         )
     );
     console.log(getText(`▶️  启动浏览器: ${browserExecutablePath}`, `▶️  Launching browser: ${browserExecutablePath}`));
@@ -1175,10 +1148,11 @@ const autoFillRecoveryEmailIfRequired = async (page, recoveryEmail, randomWait) 
             )
         );
 
-        const compactStateString = JSON.stringify(currentState);
-        const authFilePath = path.join(configDirPath, authFileName);
-
-        fs.writeFileSync(authFilePath, compactStateString);
+        // Allocate at commit time using durable high-water/tombstone metadata.
+        // This CLI is an offline writer, not a concurrent second server process.
+        const store = new CredentialStore({ rootDir: projectRoot });
+        const { index } = await store.create(currentState);
+        const authFileName = `auth-${index}.json`;
         console.log(
             getText(
                 `   📄 认证文件已保存到: ${path.join(CONFIG_DIR, authFileName)}`,
