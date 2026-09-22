@@ -41,7 +41,7 @@ const requiredGates = [
     "W2-08 real settings store concurrent writers, disk failure, apply failure, restart semantics and bind-mount fallback",
     "W2-09 size limits, pagination, export permission and credential/token redaction in status/tasks/audit/errors",
 ];
-const deferredLive = "LIVE-01 deferred by user: real two-account model evidence is outside this local-only round";
+const deferredLive = "LIVE-01 not supplied: provide --live-evidence from a successful real two-account run";
 
 function resolveRef(value) {
     assert.ok(value.startsWith("#/"), `Only local references are allowed: ${value}`);
@@ -298,7 +298,14 @@ registerKeyPanelTests(test);
 registerLocalAcceptance(test);
 const pendingGates = requiredGates.filter(gate => !gateIds.includes(gate.slice(0, 5)));
 for (const gate of pendingGates) test.todo(gate);
-test.skip(deferredLive);
+const liveEvidenceIndex = process.argv.indexOf("--live-evidence");
+const liveEvidencePath = liveEvidenceIndex >= 0 ? process.argv[liveEvidenceIndex + 1] : null;
+const validateLive = () => {
+    assert.ok(liveEvidencePath, "LIVE evidence missing; no real-account claim is permitted");
+    require("./live/evidence").validateEvidenceFile(liveEvidencePath, path.resolve(__dirname, "../.."));
+};
+if (liveEvidencePath) test("LIVE-01 recorded real two-account evidence", validateLive);
+else test.skip(deferredLive);
 if (process.argv.includes("--require-local")) {
     test("local management acceptance gate", () => {
         assert.equal(pendingGates.length, 0, "LOCAL NOT ACCEPTED: real wave-2 integration gates remain pending.");
@@ -307,6 +314,6 @@ if (process.argv.includes("--require-local")) {
 if (process.argv.includes("--require-full")) {
     test("full management acceptance gate", () => {
         assert.equal(pendingGates.length, 0, "NOT ACCEPTED: real wave-2 integration gates remain pending.");
-        assert.fail(deferredLive);
+        validateLive();
     });
 }

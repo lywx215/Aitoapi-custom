@@ -168,7 +168,7 @@ class ProxyServerSystem extends EventEmitter {
         const allAvailableIndices = this.authSource.availableIndices;
         const allRotationIndices = this.authSource.getRotationIndices();
 
-        if (allAvailableIndices.length === 0) {
+        if (allAvailableIndices.length === 0 || allRotationIndices.length === 0) {
             this.logger.warn("[System] No available authentication source. Starting in account binding mode.");
             await this.managementTaskService.start();
             this.emit("started");
@@ -176,7 +176,7 @@ class ProxyServerSystem extends EventEmitter {
         }
 
         // Determine startup order
-        let startupOrder = allRotationIndices.length > 0 ? [...allRotationIndices] : [...allAvailableIndices];
+        let startupOrder = [...allRotationIndices];
         const hasInitialAuthIndex = Number.isInteger(initialAuthIndex);
         if (hasInitialAuthIndex) {
             const canonicalInitialIndex = this.authSource.getCanonicalIndex(initialAuthIndex);

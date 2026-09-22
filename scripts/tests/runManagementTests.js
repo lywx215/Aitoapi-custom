@@ -12,6 +12,7 @@ const tests = [
     "managementTasks",
     "managementRoutes",
     "managementVerifier",
+    "managementLiveHarness",
     "managementAcceptance",
     "requestRouting",
     "backgroundWakeup",

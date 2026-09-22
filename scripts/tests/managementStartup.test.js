@@ -58,6 +58,29 @@ const LoggingService = require("../../src/utils/LoggingService");
         assert.equal((await request("/v1/models", token)).status, 401);
         assert.equal((await request("/api/manage/v1/accounts", "fixture-model-key")).status, 401);
         assert.equal(system.browserManager.browser, null);
+        const pending = await system.authSource.createAuth(
+            { accountName: "pending@fixture.test", cookies: [], origins: [] },
+            {
+                disabled: true,
+                reason: "pending_verification",
+            }
+        );
+        await system.shutdown();
+        system = new ProxyServerSystem();
+        system.config.host = "127.0.0.1";
+        system.config.httpPort = 0;
+        system.config.wsPort = 0;
+        system.config.checkUpdate = false;
+        let preloadCalls = 0;
+        system.browserManager.preloadContextPool = async () => {
+            preloadCalls++;
+            throw new Error("Disabled account must not launch");
+        };
+        await system.start();
+        assert.equal(preloadCalls, 0);
+        assert.equal(system.authSource.store.getMetadata(pending.index).disabled, true);
+        assert.equal((await request("/api/manage/v1/accounts", token)).body.data.total, 1);
+        assert.equal(system.browserManager.browser, null);
         console.log("managementStartup: real empty-instance HTTP/WS startup, key separation and shutdown passed");
     } finally {
         if (system) await system.shutdown();
