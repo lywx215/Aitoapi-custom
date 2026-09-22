@@ -443,6 +443,27 @@ test("queue capacity rejects new admissions but preserves idempotent replay", as
     f.tasks.state.tasks = previous;
 });
 
+test("invalid or duplicate client references and invalid model names fail before task or credential writes", t => {
+    const f = fixture(t);
+    const valid = { clientRef: "alpha", credentials: credentials("alpha") };
+    const tasksFile = path.join(f.rootDir, "data/management/tasks.json");
+    const before = fs.readFileSync(tasksFile, "utf8");
+    for (const clientRef of ["", "x".repeat(129), 123]) {
+        assert.throws(() => f.submit("import", { items: [{ ...valid, clientRef }] }), { code: "INVALID_REQUEST" });
+    }
+    assert.throws(() => f.submit("import", { items: [valid, { ...valid, credentials: credentials("beta") }] }), {
+        code: "INVALID_REQUEST",
+    });
+    for (const model of ["", "contains space", "path/model", "_prefix", "x".repeat(129), 123]) {
+        assert.throws(() => f.submit("import", { items: [valid], model }), { code: "INVALID_REQUEST" });
+        assert.throws(() => f.submit("test", { model }, "fixture-id"), { code: "INVALID_REQUEST" });
+    }
+    assert.equal(fs.readFileSync(tasksFile, "utf8"), before);
+    assert.equal(fs.readdirSync(path.join(f.rootDir, "data/management/task-inputs")).length, 0);
+    assert.equal(f.store.listMetadata().length, 0);
+    assert.equal(f.tasks.list().total, 0);
+});
+
 // Explicit integration mode uses the real T6 verifier with loopback transport and a synthetic page adapter.
 // In an integrated checkout: node scripts/tests/managementTasks.test.js --verifier-integration
 // During independent worktree development an optional following module path is read-only.

@@ -524,7 +524,7 @@ class ProxyServerSystem extends EventEmitter {
 
         // Legacy console namespaces are local too; a typo or wrong HTTP verb
         // must not accidentally become a Google request after model-key auth.
-        app.use(/^\/(?:api\/(?:accounts|settings|auth|files|status|usage-stats)|login|logout)(?:\/|$)/i, (req, res) =>
+        app.use(/^\/(?:api\/(?:accounts|settings|auth|files|status|usage-stats)|login|logout)(?=\/|$)/i, (req, res) =>
             res.status(404).json({ error: "NOT_FOUND", message: "Management route or method not found." })
         );
 
