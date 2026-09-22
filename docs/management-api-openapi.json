@@ -18,6 +18,7 @@
                 "name": "Idempotency-Key",
                 "required": true,
                 "schema": {
+                    "maxLength": 256,
                     "minLength": 1,
                     "type": "string"
                 }
@@ -83,7 +84,7 @@
                         }
                     }
                 },
-                "description": "IDEMPOTENCY_KEY_REQUIRED: A task submission omitted Idempotency-Key. INVALID_CREDENTIALS: Invalid Playwright storage state or forbidden management control fields. INVALID_REQUEST: Malformed JSON, invalid field, ID, pagination or unknown setting. INVALID_SETTINGS: Settings patch contains an unsupported field or invalid value. INVALID_INDEX: Account filesystem index is invalid. VERSION_REQUIRED: An internal guarded storage refresh omitted expectedCredentialVersion."
+                "description": "IDEMPOTENCY_KEY_REQUIRED: A task submission omitted Idempotency-Key. INVALID_CREDENTIALS: Invalid Playwright storage state or forbidden management control fields. INVALID_REQUEST: Malformed JSON, invalid field, ID, pagination or unknown setting."
             },
             "Error401": {
                 "content": {
@@ -103,7 +104,7 @@
                         }
                     }
                 },
-                "description": "FORBIDDEN: Authenticated key lacks a required scope. CONSOLE_PASSWORD_REQUIRED: Key administration requires a fresh console-password session; model-key or old sessions do not qualify."
+                "description": "CONSOLE_PASSWORD_REQUIRED: Key administration requires a fresh console-password session; model-key or old sessions do not qualify. FORBIDDEN: Authenticated key lacks a required scope."
             },
             "Error404": {
                 "content": {
@@ -133,7 +134,7 @@
                         }
                     }
                 },
-                "description": "IDEMPOTENCY_CONFLICT: The same management key and Idempotency-Key were used with different canonical content. DUPLICATE_ACCOUNT: Account email already exists; import never replaces existing credentials. VERSION_CONFLICT: Credential/state changed after verification began; stale commit rejected. ACCOUNT_BUSY: Account did not drain within 60 seconds; no forced interruption without force:true. INVALID_STATE: Requested transition is not valid in the current account/task state."
+                "description": "ACCOUNT_BUSY: Account did not drain within 60 seconds; no forced interruption without force:true. CANCELLED: Cooperative cancellation stopped uncommitted task work. DUPLICATE_ACCOUNT: Account email already exists; import never replaces existing credentials. IDEMPOTENCY_CONFLICT: The same management key and Idempotency-Key were used with different canonical content. INTERRUPTED: Process restarted while the task was running; no automatic replay. INVALID_STATE: Requested transition is not valid in the current account/task state. VERSION_CONFLICT: Credential/state changed after verification began; stale commit rejected."
             },
             "Error413": {
                 "content": {
@@ -163,7 +164,7 @@
                         }
                     }
                 },
-                "description": "INTERNAL_ERROR: Unexpected failure; message is redacted. PERSISTENCE_ERROR: Durable write failed; do not report a successful mutation. AUDIT_PERSISTENCE_FAILED: Operation committed but audit persistence failed. Read the resource/task state before retrying. SETTINGS_PERSISTENCE_FAILED: Settings persistence failed; live configuration was not changed. SETTINGS_PERSISTENCE_RECOVERY_FAILED: Settings write and restoration both failed; live configuration was not changed and disk state needs inspection."
+                "description": "AUDIT_PERSISTENCE_FAILED: Operation committed but audit persistence failed. Read the resource/task state before retrying. INTERNAL_ERROR: Unexpected failure; message is redacted. PERSISTENCE_ERROR: Durable write failed; do not report a successful mutation. VERIFICATION_FAILED: Task item failed target-account verification; never fail over to another account. Async verification errors are reported in task/item.error; GET task still returns 200. VERIFICATION_TIMEOUT: Task item exceeded overall 10 minute verifier deadline. Async verification errors are reported in task/item.error; GET task still returns 200."
             }
         },
         "schemas": {
@@ -479,7 +480,8 @@
                     {
                         "description": "Legacy JSON-encoded Credentials object; decoded content is subject to identical schema and byte limits.",
                         "minLength": 1,
-                        "type": "string"
+                        "type": "string",
+                        "x-max-json-bytes": 1048576
                     }
                 ]
             },
@@ -544,14 +546,7 @@
                     "VERIFICATION_TIMEOUT",
                     "CANCELLED",
                     "INTERRUPTED",
-                    "AUDIT_PERSISTENCE_FAILED",
-                    "INVALID_SETTINGS",
-                    "SETTINGS_PERSISTENCE_FAILED",
-                    "SETTINGS_PERSISTENCE_RECOVERY_FAILED",
-                    "SETTINGS_APPLICATION_FAILED",
-                    "ACCOUNT_NOT_FOUND",
-                    "INVALID_INDEX",
-                    "VERSION_REQUIRED"
+                    "AUDIT_PERSISTENCE_FAILED"
                 ],
                 "type": "string"
             },
@@ -609,6 +604,7 @@
                                     "description": "Nonempty caller reference, unique within this import batch; duplicates are rejected at admission without creating a task.",
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "\\S",
                                     "type": "string"
                                 },
                                 "credentials": {
@@ -1600,9 +1596,9 @@
         }
     },
     "info": {
-        "description": "Local simulated acceptance in progress on real services. LIVE-01 is deferred by explicit user scope and is never counted as passed. Shared contract: docs/management-api-contract.md. No production deployment or real-account/model execution in this round.",
+        "description": "External management API validated by real-service local simulated acceptance. Actual ProxyServerSystem mounts, storage, key/task/account services, verifier, loopback WebSocket and real client script are exercised; browser resources and upstream fetch are synthetic. LIVE-01 is explicitly deferred and is not a pass. Single process/replica; offline CLI requires a stopped service. No deployment or real credentials/model calls in this round.",
         "title": "Aitoapi external management API",
-        "version": "1.0.0-local-acceptance-draft.2"
+        "version": "1.0.0"
     },
     "openapi": "3.0.3",
     "paths": {
@@ -3164,17 +3160,13 @@
             "description": "Account did not drain within 60 seconds; no forced interruption without force:true.",
             "httpStatus": 409
         },
-        "ACCOUNT_NOT_FOUND": {
-            "description": "Account is missing or no longer active.",
-            "httpStatus": 404
-        },
         "AUDIT_PERSISTENCE_FAILED": {
             "description": "Operation committed but audit persistence failed. Read the resource/task state before retrying.",
             "httpStatus": 500
         },
         "CANCELLED": {
             "description": "Cooperative cancellation stopped uncommitted task work.",
-            "httpStatus": null
+            "httpStatus": 409
         },
         "CONSOLE_PASSWORD_REQUIRED": {
             "description": "Key administration requires a fresh console-password session; model-key or old sessions do not qualify.",
@@ -3202,22 +3194,14 @@
         },
         "INTERRUPTED": {
             "description": "Process restarted while the task was running; no automatic replay.",
-            "httpStatus": null
+            "httpStatus": 409
         },
         "INVALID_CREDENTIALS": {
             "description": "Invalid Playwright storage state or forbidden management control fields.",
             "httpStatus": 400
         },
-        "INVALID_INDEX": {
-            "description": "Account filesystem index is invalid.",
-            "httpStatus": 400
-        },
         "INVALID_REQUEST": {
             "description": "Malformed JSON, invalid field, ID, pagination or unknown setting.",
-            "httpStatus": 400
-        },
-        "INVALID_SETTINGS": {
-            "description": "Settings patch contains an unsupported field or invalid value.",
             "httpStatus": 400
         },
         "INVALID_STATE": {
@@ -3244,40 +3228,24 @@
             "description": "Management admission limit reached; retry later.",
             "httpStatus": 429
         },
-        "SETTINGS_APPLICATION_FAILED": {
-            "description": "Settings were committed but applying runtime side effects failed; applicationError contains this code and a redacted message.",
-            "httpStatus": null
-        },
-        "SETTINGS_PERSISTENCE_FAILED": {
-            "description": "Settings persistence failed; live configuration was not changed.",
-            "httpStatus": 500
-        },
-        "SETTINGS_PERSISTENCE_RECOVERY_FAILED": {
-            "description": "Settings write and restoration both failed; live configuration was not changed and disk state needs inspection.",
-            "httpStatus": 500
-        },
         "UNAUTHORIZED": {
             "description": "Missing, invalid, expired or revoked management bearer token.",
             "httpStatus": 401
         },
         "VERIFICATION_FAILED": {
-            "description": "Task item failed target-account verification; never fail over to another account.",
-            "httpStatus": null
+            "description": "Task item failed target-account verification; never fail over to another account. Async verification errors are reported in task/item.error; GET task still returns 200.",
+            "httpStatus": 500
         },
         "VERIFICATION_TIMEOUT": {
-            "description": "Task item exceeded overall 10 minute verifier deadline.",
-            "httpStatus": null
+            "description": "Task item exceeded overall 10 minute verifier deadline. Async verification errors are reported in task/item.error; GET task still returns 200.",
+            "httpStatus": 500
         },
         "VERSION_CONFLICT": {
             "description": "Credential/state changed after verification began; stale commit rejected.",
             "httpStatus": 409
-        },
-        "VERSION_REQUIRED": {
-            "description": "An internal guarded storage refresh omitted expectedCredentialVersion.",
-            "httpStatus": 400
         }
     },
-    "x-implementation-status": "local acceptance preparation; wave-2 and live gates pending",
+    "x-implementation-status": "local simulated W2 acceptance passed; LIVE-01 deferred by user",
     "x-limits": {
         "batchItems": 100,
         "bodyBytes": 10485760,
@@ -3315,5 +3283,12 @@
             "tasks:write"
         ],
         "readonly": ["system:read", "accounts:read", "settings:read", "usage:read", "audit:read", "tasks:read"]
+    },
+    "x-storage-error-aliases": {
+        "ACCOUNT_NOT_FOUND": "NOT_FOUND",
+        "INVALID_INDEX": "INVALID_REQUEST",
+        "INVALID_SETTINGS": "INVALID_REQUEST",
+        "SETTINGS_PERSISTENCE_FAILED": "PERSISTENCE_ERROR",
+        "SETTINGS_PERSISTENCE_RECOVERY_FAILED": "PERSISTENCE_ERROR"
     }
 }

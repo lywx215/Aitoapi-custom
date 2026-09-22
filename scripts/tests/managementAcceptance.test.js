@@ -6,6 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { createHarness } = require("./fixtures/management/harness");
 const { registerKeyPanelTests } = require("./fixtures/management/keyPanel");
+const { gateIds, registerLocalAcceptance } = require("./fixtures/management/localAcceptance");
 const spec = require("../../docs/management-api-openapi.json");
 
 const expectedRoutes = {
@@ -29,7 +30,7 @@ const expectedRoutes = {
     "/tasks/{id}/cancel": ["post"],
     "/usage": ["get"],
 };
-const pendingGates = [
+const requiredGates = [
     "W2-01 real management authentication: bearer only, scope matrix, session/model-key rejection, key lifecycle",
     "W2-02 real router mounting: JSON parser errors, server request IDs, namespace 404/405 and unchanged model fallback",
     "W2-03 two distinct fixture candidates through real import/task/account/verifier orchestration, attribution and autoenable",
@@ -61,7 +62,7 @@ function walk(value, visit) {
 
 test("C01 OpenAPI route inventory, refs and per-route auth/task contracts", () => {
     assert.equal(spec.openapi, "3.0.3");
-    assert.match(spec["x-implementation-status"], /wave-2 and live gates pending/);
+    assert.match(spec["x-implementation-status"], /LIVE-01 deferred/);
     const expected = Object.fromEntries(
         Object.entries(expectedRoutes).map(([url, methods]) => ["/api/manage/v1" + url, methods])
     );
@@ -160,7 +161,7 @@ test("C02 OpenAPI limits, schemas, errors and token scope templates", () => {
         assert.ok(Object.hasOwn(spec["x-error-catalog"], code));
     }
     assert.equal(spec["x-error-catalog"].IDEMPOTENCY_CONFLICT.httpStatus, 409);
-    assert.equal(spec["x-error-catalog"].VERIFICATION_FAILED.httpStatus, null);
+    assert.equal(spec["x-error-catalog"].VERIFICATION_FAILED.httpStatus, 500);
     assert.deepEqual(spec["x-scope-templates"].admin, schemas.Scope.enum);
     for (const scope of ["accounts:export", "accounts:archive", "settings:write", "audit:read"]) {
         assert.ok(!spec["x-scope-templates"].operator.includes(scope));
@@ -294,6 +295,8 @@ test("legacy real-service baseline with isolated fixtures (not wave-2 acceptance
 });
 
 registerKeyPanelTests(test);
+registerLocalAcceptance(test);
+const pendingGates = requiredGates.filter(gate => !gateIds.includes(gate.slice(0, 5)));
 for (const gate of pendingGates) test.todo(gate);
 test.skip(deferredLive);
 if (process.argv.includes("--require-local")) {
