@@ -1,0 +1,3218 @@
+{
+    "components": {
+        "parameters": {
+            "AccountId": {
+                "description": "Stable accountId, not numeric index; archived IDs can be restored.",
+                "in": "path",
+                "name": "id",
+                "required": true,
+                "schema": {
+                    "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                    "minLength": 1,
+                    "type": "string"
+                }
+            },
+            "IdempotencyKey": {
+                "description": "Required on mutating task submissions. Scoped by authenticated key ID and canonical method/path/body. Same content returns original task/admission; changed content yields 409. Retained 30 days with tasks.",
+                "in": "header",
+                "name": "Idempotency-Key",
+                "required": true,
+                "schema": {
+                    "minLength": 1,
+                    "type": "string"
+                }
+            },
+            "KeyId": {
+                "description": "Management key identifier, never the token.",
+                "in": "path",
+                "name": "id",
+                "required": true,
+                "schema": {
+                    "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                    "minLength": 1,
+                    "type": "string"
+                }
+            },
+            "Limit": {
+                "in": "query",
+                "name": "limit",
+                "schema": {
+                    "default": 50,
+                    "maximum": 200,
+                    "minimum": 1,
+                    "type": "integer"
+                }
+            },
+            "Offset": {
+                "in": "query",
+                "name": "offset",
+                "schema": {
+                    "default": 0,
+                    "minimum": 0,
+                    "type": "integer"
+                }
+            },
+            "TaskId": {
+                "description": "Opaque taskId.",
+                "in": "path",
+                "name": "id",
+                "required": true,
+                "schema": {
+                    "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                    "minLength": 1,
+                    "type": "string"
+                }
+            }
+        },
+        "responses": {
+            "Error400": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "INVALID_REQUEST: Malformed JSON, invalid field, ID, pagination or unknown setting. INVALID_CREDENTIALS: Invalid Playwright storage state or forbidden management control fields. IDEMPOTENCY_KEY_REQUIRED: A task submission omitted Idempotency-Key."
+            },
+            "Error401": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "UNAUTHORIZED: Missing, invalid, expired or revoked management bearer token."
+            },
+            "Error403": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "FORBIDDEN: Authenticated key lacks a required scope. CONSOLE_PASSWORD_REQUIRED: Key administration requires a fresh console-password session; model-key or old sessions do not qualify."
+            },
+            "Error404": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "NOT_FOUND: Resource or management route does not exist."
+            },
+            "Error405": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "METHOD_NOT_ALLOWED: Known management path does not support this method; no model fallback."
+            },
+            "Error409": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "IDEMPOTENCY_CONFLICT: The same management key and Idempotency-Key were used with different canonical content. DUPLICATE_ACCOUNT: Account email already exists; import never replaces existing credentials. VERSION_CONFLICT: Credential/state changed after verification began; stale commit rejected. ACCOUNT_BUSY: Account did not drain within 60 seconds; no forced interruption without force:true. INVALID_STATE: Requested transition is not valid in the current account/task state."
+            },
+            "Error413": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "PAYLOAD_TOO_LARGE: Body exceeds 10 MiB, credentials exceed 1 MiB, or batch exceeds 100 items."
+            },
+            "Error429": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "RATE_LIMITED: Management admission limit reached; retry later."
+            },
+            "Error500": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/ErrorEnvelope"
+                        }
+                    }
+                },
+                "description": "PERSISTENCE_ERROR: Durable write failed; do not report a successful mutation. INTERNAL_ERROR: Unexpected failure; message is redacted."
+            }
+        },
+        "schemas": {
+            "Account": {
+                "additionalProperties": false,
+                "description": "Allowlisted metadata only; never contains cookies, origins, token hashes, credential paths or raw credentials.",
+                "properties": {
+                    "accountId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "accountName": {
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "archived": {
+                        "type": "boolean"
+                    },
+                    "credentialVersion": {
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "disabledAt": {
+                        "format": "date-time",
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "disabledReason": {
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "disabledStatus": {
+                        "maximum": 599,
+                        "minimum": 100,
+                        "nullable": true,
+                        "type": "integer"
+                    },
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "expired": {
+                        "type": "boolean"
+                    },
+                    "index": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "stateVersion": {
+                        "minimum": 1,
+                        "type": "integer"
+                    }
+                },
+                "required": ["accountId", "index", "enabled", "archived", "credentialVersion", "stateVersion"],
+                "type": "object"
+            },
+            "AccountEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/Account"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "AccountExport": {
+                "additionalProperties": false,
+                "description": "Only route returning credential state; requires accounts:export. Treat the entire response as a secret.",
+                "properties": {
+                    "items": {
+                        "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "accountId": {
+                                    "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                                    "minLength": 1,
+                                    "type": "string"
+                                },
+                                "credentials": {
+                                    "$ref": "#/components/schemas/Credentials"
+                                },
+                                "index": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                }
+                            },
+                            "required": ["accountId", "index", "credentials"],
+                            "type": "object"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": ["items"],
+                "type": "object"
+            },
+            "AccountExportEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/AccountExport"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "AccountPage": {
+                "additionalProperties": false,
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/Account"
+                        },
+                        "type": "array"
+                    },
+                    "limit": {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "total": {
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": ["items", "total", "offset", "limit"],
+                "type": "object"
+            },
+            "AccountPageEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/AccountPage"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "AccountPatch": {
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "force": {
+                        "default": false,
+                        "type": "boolean"
+                    }
+                },
+                "required": ["enabled"],
+                "type": "object"
+            },
+            "AuditEntry": {
+                "additionalProperties": false,
+                "description": "30-day retention; never store raw tokens, cookie/storage state or request credential bodies.",
+                "properties": {
+                    "accountId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "action": {
+                        "type": "string"
+                    },
+                    "auditId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "createdByKeyId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "error": {
+                        "$ref": "#/components/schemas/Error"
+                    },
+                    "outcome": {
+                        "type": "string"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    },
+                    "taskId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "timestamp": {
+                        "format": "date-time",
+                        "type": "string"
+                    }
+                },
+                "required": ["auditId", "requestId", "createdByKeyId", "action", "timestamp", "outcome"],
+                "type": "object"
+            },
+            "AuditPage": {
+                "additionalProperties": false,
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/AuditEntry"
+                        },
+                        "type": "array"
+                    },
+                    "limit": {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "total": {
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": ["items", "total", "offset", "limit"],
+                "type": "object"
+            },
+            "AuditPageEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/AuditPage"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "BatchRequest": {
+                "additionalProperties": false,
+                "properties": {
+                    "accountIds": {
+                        "items": {
+                            "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                            "minLength": 1,
+                            "type": "string"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                    },
+                    "action": {
+                        "enum": ["enable", "disable", "archive"],
+                        "type": "string"
+                    },
+                    "force": {
+                        "default": false,
+                        "type": "boolean"
+                    }
+                },
+                "required": ["action", "accountIds"],
+                "type": "object"
+            },
+            "Cookie": {
+                "additionalProperties": false,
+                "description": "Playwright storage-state cookie; sensitive and accepted/exported only as credentials.",
+                "properties": {
+                    "domain": {
+                        "type": "string"
+                    },
+                    "expires": {
+                        "type": "number"
+                    },
+                    "httpOnly": {
+                        "type": "boolean"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "sameSite": {
+                        "enum": ["Strict", "Lax", "None"],
+                        "type": "string"
+                    },
+                    "secure": {
+                        "type": "boolean"
+                    },
+                    "value": {
+                        "type": "string"
+                    }
+                },
+                "required": ["name", "value", "domain", "path", "expires", "httpOnly", "secure", "sameSite"],
+                "type": "object"
+            },
+            "CredentialInput": {
+                "oneOf": [
+                    {
+                        "$ref": "#/components/schemas/Credentials"
+                    },
+                    {
+                        "description": "Legacy JSON-encoded Credentials object; decoded content is subject to identical schema and byte limits.",
+                        "minLength": 1,
+                        "type": "string"
+                    }
+                ]
+            },
+            "Credentials": {
+                "additionalProperties": false,
+                "description": "External import accepts only accountName, cookies and origins. Control fields such as disabled/expired/accountId/index and versions are rejected. Maximum 1 MiB UTF-8 serialized credentials.",
+                "properties": {
+                    "accountName": {
+                        "type": "string"
+                    },
+                    "cookies": {
+                        "items": {
+                            "$ref": "#/components/schemas/Cookie"
+                        },
+                        "type": "array"
+                    },
+                    "origins": {
+                        "items": {
+                            "$ref": "#/components/schemas/Origin"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": ["cookies", "origins"],
+                "type": "object",
+                "x-max-json-bytes": 1048576
+            },
+            "Error": {
+                "additionalProperties": false,
+                "properties": {
+                    "code": {
+                        "$ref": "#/components/schemas/ErrorCode"
+                    },
+                    "message": {
+                        "type": "string"
+                    }
+                },
+                "required": ["code", "message"],
+                "type": "object"
+            },
+            "ErrorCode": {
+                "description": "HTTP mappings and task-only codes are documented in x-error-catalog.",
+                "enum": [
+                    "INVALID_REQUEST",
+                    "INVALID_CREDENTIALS",
+                    "IDEMPOTENCY_KEY_REQUIRED",
+                    "UNAUTHORIZED",
+                    "FORBIDDEN",
+                    "CONSOLE_PASSWORD_REQUIRED",
+                    "NOT_FOUND",
+                    "METHOD_NOT_ALLOWED",
+                    "IDEMPOTENCY_CONFLICT",
+                    "DUPLICATE_ACCOUNT",
+                    "VERSION_CONFLICT",
+                    "ACCOUNT_BUSY",
+                    "INVALID_STATE",
+                    "PAYLOAD_TOO_LARGE",
+                    "RATE_LIMITED",
+                    "PERSISTENCE_ERROR",
+                    "INTERNAL_ERROR",
+                    "VERIFICATION_FAILED",
+                    "VERIFICATION_TIMEOUT",
+                    "CANCELLED",
+                    "INTERRUPTED"
+                ],
+                "type": "string"
+            },
+            "ErrorEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "error": {
+                        "$ref": "#/components/schemas/Error"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["error", "requestId"],
+                "type": "object"
+            },
+            "ExportRequest": {
+                "additionalProperties": false,
+                "properties": {
+                    "accountIds": {
+                        "items": {
+                            "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                            "minLength": 1,
+                            "type": "string"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                    }
+                },
+                "required": ["accountIds"],
+                "type": "object"
+            },
+            "ForceRequest": {
+                "additionalProperties": false,
+                "properties": {
+                    "force": {
+                        "default": false,
+                        "type": "boolean"
+                    }
+                },
+                "required": [],
+                "type": "object"
+            },
+            "ImportRequest": {
+                "additionalProperties": false,
+                "description": "Verify each isolated candidate with a real model result, then commit/enable if versions still match. Reject duplicate email; do not replace.",
+                "properties": {
+                    "items": {
+                        "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "clientRef": {
+                                    "type": "string"
+                                },
+                                "credentials": {
+                                    "$ref": "#/components/schemas/CredentialInput"
+                                }
+                            },
+                            "required": ["clientRef", "credentials"],
+                            "type": "object"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array"
+                    },
+                    "model": {
+                        "default": "gemini-3.8-flash",
+                        "type": "string"
+                    }
+                },
+                "required": ["items"],
+                "type": "object"
+            },
+            "KeyCreated": {
+                "additionalProperties": false,
+                "properties": {
+                    "key": {
+                        "$ref": "#/components/schemas/ManagementKey"
+                    },
+                    "token": {
+                        "description": "Shown once. mgmt_ prefix plus encoding of 32 cryptographically random bytes; only SHA-256 hash is persisted.",
+                        "pattern": "^mgmt_.+",
+                        "readOnly": true,
+                        "type": "string"
+                    }
+                },
+                "required": ["key", "token"],
+                "type": "object"
+            },
+            "KeyCreatedEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/KeyCreated"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "KeyCreateRequest": {
+                "additionalProperties": false,
+                "properties": {
+                    "expiresAt": {
+                        "format": "date-time",
+                        "type": "string"
+                    },
+                    "name": {
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "scopes": {
+                        "items": {
+                            "$ref": "#/components/schemas/Scope"
+                        },
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                    }
+                },
+                "required": ["name", "scopes"],
+                "type": "object"
+            },
+            "KeyPage": {
+                "additionalProperties": false,
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/ManagementKey"
+                        },
+                        "type": "array"
+                    },
+                    "limit": {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "total": {
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": ["items", "total", "offset", "limit"],
+                "type": "object"
+            },
+            "KeyPageEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/KeyPage"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "KeyRevoked": {
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "revoked": {
+                        "type": "boolean"
+                    }
+                },
+                "required": ["id", "revoked"],
+                "type": "object"
+            },
+            "KeyRevokedEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/KeyRevoked"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "ManagementKey": {
+                "additionalProperties": false,
+                "properties": {
+                    "createdAt": {
+                        "format": "date-time",
+                        "type": "string"
+                    },
+                    "expiresAt": {
+                        "format": "date-time",
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "id": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "revokedAt": {
+                        "format": "date-time",
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "scopes": {
+                        "items": {
+                            "$ref": "#/components/schemas/Scope"
+                        },
+                        "type": "array",
+                        "uniqueItems": true
+                    }
+                },
+                "required": ["id", "name", "scopes", "createdAt", "expiresAt", "revokedAt"],
+                "type": "object"
+            },
+            "Origin": {
+                "additionalProperties": false,
+                "properties": {
+                    "localStorage": {
+                        "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "name": {
+                                    "type": "string"
+                                },
+                                "value": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": ["name", "value"],
+                            "type": "object"
+                        },
+                        "type": "array"
+                    },
+                    "origin": {
+                        "format": "uri",
+                        "type": "string"
+                    }
+                },
+                "required": ["origin", "localStorage"],
+                "type": "object"
+            },
+            "Readiness": {
+                "additionalProperties": false,
+                "properties": {
+                    "checks": {
+                        "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "message": {
+                                    "type": "string"
+                                },
+                                "name": {
+                                    "type": "string"
+                                },
+                                "ready": {
+                                    "type": "boolean"
+                                }
+                            },
+                            "required": ["name", "ready"],
+                            "type": "object"
+                        },
+                        "type": "array"
+                    },
+                    "ready": {
+                        "type": "boolean"
+                    }
+                },
+                "required": ["ready", "checks"],
+                "type": "object"
+            },
+            "ReadinessEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/Readiness"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "Scope": {
+                "enum": [
+                    "system:read",
+                    "accounts:read",
+                    "accounts:write",
+                    "accounts:test",
+                    "accounts:export",
+                    "accounts:archive",
+                    "settings:read",
+                    "settings:write",
+                    "usage:read",
+                    "audit:read",
+                    "tasks:read",
+                    "tasks:write"
+                ],
+                "type": "string"
+            },
+            "SettingsPatch": {
+                "additionalProperties": false,
+                "description": "Explicit values; no toggle semantics. Eight persistent keys survive restart; other allowlisted flags retain legacy restart behavior. accountCooldownMaxMs must be >= accountCooldownMs.",
+                "minProperties": 1,
+                "properties": {
+                    "accountCooldownMaxMs": {
+                        "maximum": 604800000,
+                        "minimum": 1000,
+                        "type": "integer"
+                    },
+                    "accountCooldownMs": {
+                        "maximum": 86400000,
+                        "minimum": 1000,
+                        "type": "integer"
+                    },
+                    "autoDisableStatusCodes": {
+                        "items": {
+                            "maximum": 599,
+                            "minimum": 400,
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "uniqueItems": true
+                    },
+                    "autoHealProbeIntervalMs": {
+                        "maximum": 604800000,
+                        "minimum": 60000,
+                        "type": "integer"
+                    },
+                    "autoHealProbeTimeoutMs": {
+                        "maximum": 3600000,
+                        "minimum": 30000,
+                        "type": "integer"
+                    },
+                    "checkUpdate": {
+                        "type": "boolean"
+                    },
+                    "enableAuthUpdate": {
+                        "type": "boolean"
+                    },
+                    "forceCodeExecution": {
+                        "type": "boolean"
+                    },
+                    "forceThinking": {
+                        "type": "boolean"
+                    },
+                    "forceUrlContext": {
+                        "type": "boolean"
+                    },
+                    "forceWebSearch": {
+                        "type": "boolean"
+                    },
+                    "maxContexts": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "maxRetries": {
+                        "maximum": 20,
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "retryDelay": {
+                        "maximum": 600000,
+                        "minimum": 50,
+                        "type": "integer"
+                    },
+                    "safetySettingsThreshold": {
+                        "enum": [
+                            "HARM_BLOCK_THRESHOLD_UNSPECIFIED",
+                            "BLOCK_LOW_AND_ABOVE",
+                            "BLOCK_MEDIUM_AND_ABOVE",
+                            "BLOCK_ONLY_HIGH",
+                            "BLOCK_NONE",
+                            "OFF"
+                        ],
+                        "type": "string"
+                    },
+                    "streamingMode": {
+                        "enum": ["real", "fake"],
+                        "type": "string"
+                    }
+                },
+                "required": [],
+                "type": "object"
+            },
+            "SettingsSnapshot": {
+                "additionalProperties": false,
+                "properties": {
+                    "persistentKeys": {
+                        "items": {
+                            "enum": [
+                                "maxContexts",
+                                "maxRetries",
+                                "retryDelay",
+                                "autoDisableStatusCodes",
+                                "accountCooldownMs",
+                                "accountCooldownMaxMs",
+                                "autoHealProbeIntervalMs",
+                                "autoHealProbeTimeoutMs"
+                            ],
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": true
+                    },
+                    "values": {
+                        "$ref": "#/components/schemas/SettingsValues"
+                    }
+                },
+                "required": ["values", "persistentKeys"],
+                "type": "object"
+            },
+            "SettingsSnapshotEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/SettingsSnapshot"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "SettingsUpdated": {
+                "additionalProperties": false,
+                "description": "Persist candidate before applying live configuration. persisted:true/applied:false reports a durable change whose application callback failed; do not blindly resubmit.",
+                "properties": {
+                    "applicationError": {
+                        "type": "string"
+                    },
+                    "applied": {
+                        "type": "boolean"
+                    },
+                    "persisted": {
+                        "type": "boolean"
+                    },
+                    "values": {
+                        "$ref": "#/components/schemas/SettingsValues"
+                    }
+                },
+                "required": ["values", "persisted", "applied"],
+                "type": "object"
+            },
+            "SettingsUpdatedEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/SettingsUpdated"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "SettingsValues": {
+                "additionalProperties": false,
+                "description": "Explicit values; no toggle semantics. Eight persistent keys survive restart; other allowlisted flags retain legacy restart behavior. accountCooldownMaxMs must be >= accountCooldownMs.",
+                "properties": {
+                    "accountCooldownMaxMs": {
+                        "maximum": 604800000,
+                        "minimum": 1000,
+                        "type": "integer"
+                    },
+                    "accountCooldownMs": {
+                        "maximum": 86400000,
+                        "minimum": 1000,
+                        "type": "integer"
+                    },
+                    "autoDisableStatusCodes": {
+                        "items": {
+                            "maximum": 599,
+                            "minimum": 400,
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "uniqueItems": true
+                    },
+                    "autoHealProbeIntervalMs": {
+                        "maximum": 604800000,
+                        "minimum": 60000,
+                        "type": "integer"
+                    },
+                    "autoHealProbeTimeoutMs": {
+                        "maximum": 3600000,
+                        "minimum": 30000,
+                        "type": "integer"
+                    },
+                    "checkUpdate": {
+                        "type": "boolean"
+                    },
+                    "enableAuthUpdate": {
+                        "type": "boolean"
+                    },
+                    "forceCodeExecution": {
+                        "type": "boolean"
+                    },
+                    "forceThinking": {
+                        "type": "boolean"
+                    },
+                    "forceUrlContext": {
+                        "type": "boolean"
+                    },
+                    "forceWebSearch": {
+                        "type": "boolean"
+                    },
+                    "maxContexts": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "maxRetries": {
+                        "maximum": 20,
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "retryDelay": {
+                        "maximum": 600000,
+                        "minimum": 50,
+                        "type": "integer"
+                    },
+                    "safetySettingsThreshold": {
+                        "enum": [
+                            "HARM_BLOCK_THRESHOLD_UNSPECIFIED",
+                            "BLOCK_LOW_AND_ABOVE",
+                            "BLOCK_MEDIUM_AND_ABOVE",
+                            "BLOCK_ONLY_HIGH",
+                            "BLOCK_NONE",
+                            "OFF"
+                        ],
+                        "type": "string"
+                    },
+                    "streamingMode": {
+                        "enum": ["real", "fake"],
+                        "type": "string"
+                    }
+                },
+                "required": [],
+                "type": "object"
+            },
+            "SystemStatus": {
+                "additionalProperties": false,
+                "description": "Safe operational counters; no console logs, credentials or secret config.",
+                "properties": {
+                    "accountCount": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "activeContextsCount": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "browserConnected": {
+                        "type": "boolean"
+                    },
+                    "currentAccountId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "enabledAccountCount": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "isSystemBusy": {
+                        "type": "boolean"
+                    },
+                    "ready": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "ready",
+                    "browserConnected",
+                    "isSystemBusy",
+                    "accountCount",
+                    "enabledAccountCount",
+                    "activeContextsCount"
+                ],
+                "type": "object"
+            },
+            "SystemStatusEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/SystemStatus"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "Task": {
+                "additionalProperties": false,
+                "description": "Durable for 30 days. Queued resumes on restart; running becomes interrupted without replay. Cancellation does not undo committed state.",
+                "properties": {
+                    "counts": {
+                        "$ref": "#/components/schemas/TaskCounts"
+                    },
+                    "createdAt": {
+                        "format": "date-time",
+                        "type": "string"
+                    },
+                    "createdByKeyId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "error": {
+                        "$ref": "#/components/schemas/Error"
+                    },
+                    "finishedAt": {
+                        "format": "date-time",
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/TaskItem"
+                        },
+                        "type": "array"
+                    },
+                    "kind": {
+                        "type": "string"
+                    },
+                    "result": {
+                        "additionalProperties": false,
+                        "nullable": true,
+                        "properties": {
+                            "accountIds": {
+                                "items": {
+                                    "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                                    "minLength": 1,
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            "changed": {
+                                "type": "boolean"
+                            }
+                        },
+                        "required": [],
+                        "type": "object"
+                    },
+                    "startedAt": {
+                        "format": "date-time",
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/TaskState"
+                    },
+                    "taskId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "updatedAt": {
+                        "format": "date-time",
+                        "type": "string"
+                    }
+                },
+                "required": ["taskId", "kind", "status", "createdByKeyId", "createdAt", "updatedAt", "counts", "items"],
+                "type": "object"
+            },
+            "TaskAccepted": {
+                "additionalProperties": false,
+                "description": "On idempotent replay return the original admission response and taskId, even if that task has since completed; GET the task for current status.",
+                "properties": {
+                    "status": {
+                        "enum": ["queued"],
+                        "type": "string"
+                    },
+                    "taskId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    }
+                },
+                "required": ["taskId", "status"],
+                "type": "object"
+            },
+            "TaskAcceptedEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/TaskAccepted"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "TaskCounts": {
+                "additionalProperties": false,
+                "properties": {
+                    "cancelled": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "failed": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "interrupted": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "queued": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "running": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "succeeded": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "total": {
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": ["total", "queued", "running", "succeeded", "failed", "cancelled", "interrupted"],
+                "type": "object"
+            },
+            "TaskEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/Task"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "TaskItem": {
+                "additionalProperties": false,
+                "properties": {
+                    "accountId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "type": "string"
+                    },
+                    "clientRef": {
+                        "type": "string"
+                    },
+                    "error": {
+                        "$ref": "#/components/schemas/Error"
+                    },
+                    "index": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "progress": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "result": {
+                        "$ref": "#/components/schemas/VerificationResult"
+                    },
+                    "stage": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/TaskState"
+                    }
+                },
+                "required": ["status", "progress", "stage"],
+                "type": "object"
+            },
+            "TaskPage": {
+                "additionalProperties": false,
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/Task"
+                        },
+                        "type": "array"
+                    },
+                    "limit": {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "total": {
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": ["items", "total", "offset", "limit"],
+                "type": "object"
+            },
+            "TaskPageEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/TaskPage"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "TaskState": {
+                "enum": ["queued", "running", "succeeded", "partial", "failed", "cancelled", "interrupted"],
+                "type": "string"
+            },
+            "TestRequest": {
+                "additionalProperties": false,
+                "properties": {
+                    "mode": {
+                        "default": "model",
+                        "enum": ["connection", "model"],
+                        "type": "string"
+                    },
+                    "model": {
+                        "default": "gemini-3.8-flash",
+                        "type": "string"
+                    }
+                },
+                "required": [],
+                "type": "object"
+            },
+            "UsagePage": {
+                "additionalProperties": false,
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/UsageRecord"
+                        },
+                        "type": "array"
+                    },
+                    "limit": {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "offset": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "total": {
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": ["items", "total", "offset", "limit"],
+                "type": "object"
+            },
+            "UsagePageEnvelope": {
+                "additionalProperties": false,
+                "properties": {
+                    "data": {
+                        "$ref": "#/components/schemas/UsagePage"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["data", "requestId"],
+                "type": "object"
+            },
+            "UsageRecord": {
+                "additionalProperties": false,
+                "properties": {
+                    "accountId": {
+                        "description": "Opaque stable identifier; never use the filesystem index as an account ID.",
+                        "minLength": 1,
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "durationMs": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "finishedAt": {
+                        "format": "date-time",
+                        "type": "string"
+                    },
+                    "index": {
+                        "minimum": 0,
+                        "nullable": true,
+                        "type": "integer"
+                    },
+                    "model": {
+                        "nullable": true,
+                        "type": "string"
+                    },
+                    "outcome": {
+                        "enum": ["success", "error", "aborted"],
+                        "type": "string"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    },
+                    "startedAt": {
+                        "format": "date-time",
+                        "type": "string"
+                    },
+                    "statusCode": {
+                        "maximum": 599,
+                        "minimum": 100,
+                        "nullable": true,
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "requestId",
+                    "accountId",
+                    "index",
+                    "model",
+                    "outcome",
+                    "statusCode",
+                    "durationMs",
+                    "startedAt",
+                    "finishedAt"
+                ],
+                "type": "object"
+            },
+            "VerificationResult": {
+                "additionalProperties": false,
+                "description": "Public verification result. Internal credentialState must never be serialized here. Connection mode is not proof of a model result.",
+                "properties": {
+                    "authIndex": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "model": {
+                        "type": "string"
+                    },
+                    "requestId": {
+                        "type": "string"
+                    },
+                    "stage": {
+                        "type": "string"
+                    },
+                    "success": {
+                        "type": "boolean"
+                    },
+                    "upstreamStatus": {
+                        "maximum": 599,
+                        "minimum": 100,
+                        "nullable": true,
+                        "type": "integer"
+                    }
+                },
+                "required": ["success", "authIndex", "model", "requestId", "upstreamStatus", "stage"],
+                "type": "object"
+            }
+        },
+        "securitySchemes": {
+            "ConsoleSession": {
+                "description": "Console-password session; session.authMethod must equal console_password. Model-key login and legacy sessions require console password re-login.",
+                "in": "cookie",
+                "name": "connect.sid",
+                "type": "apiKey"
+            },
+            "ManagementBearer": {
+                "bearerFormat": "mgmt_<32-random-bytes-encoded>",
+                "description": "Management token only. No console session or model API key fallback. SHA-256 hash persisted; plaintext once.",
+                "scheme": "bearer",
+                "type": "http"
+            }
+        }
+    },
+    "info": {
+        "description": "Wave 1 contract artifact, not evidence of implementation. Normative shared constraints: docs/management-api-contract.md. Operation-specific scopes, detailed response fields, error-code spelling and sync/task choices are integration refinements requiring T0/T4/T5 conformance review. All examples are synthetic. No live model verification has been performed.",
+        "title": "Aitoapi external management API",
+        "version": "1.0.0-draft.1"
+    },
+    "openapi": "3.0.3",
+    "paths": {
+        "/api/manage/v1/accounts": {
+            "get": {
+                "description": "List safe account metadata; default limit 50, maximum 200.",
+                "operationId": "listAccounts",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/Offset"
+                    },
+                    {
+                        "$ref": "#/components/parameters/Limit"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AccountPageEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "listAccounts",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:read"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/accounts/{id}": {
+            "get": {
+                "description": "Fetch account metadata using stable identity.",
+                "operationId": "getAccount",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/AccountId"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AccountEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "getAccount",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:read"],
+                "x-response-mode": "sync"
+            },
+            "patch": {
+                "description": "Set enabled explicitly. Drain active work up to 60 seconds for disable; return ACCOUNT_BUSY if still active unless force:true.",
+                "operationId": "patchAccount",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/AccountId"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AccountPatch"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AccountEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "patchAccount",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:write"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/accounts/{id}/archive": {
+            "post": {
+                "description": "Drain and archive while preserving account identity; cooperative cancellation does not roll back committed archive.",
+                "operationId": "archiveAccount",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/AccountId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ForceRequest"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": false
+                },
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "archiveAccount",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:archive"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/accounts/{id}/credentials": {
+            "put": {
+                "description": "Verify an isolated candidate and replace only credentials using expected credential/state versions. Preserve newer manual flags. Do not expose candidate state in task/audit.",
+                "operationId": "replaceAccountCredentials",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/AccountId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CredentialInput"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "replaceAccountCredentials",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:write", "accounts:test"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/accounts/{id}/reload": {
+            "post": {
+                "description": "Reload account credentials/context after safe drain; production rebalance only after committed state.",
+                "operationId": "reloadAccount",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/AccountId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ForceRequest"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": false
+                },
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "reloadAccount",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:write"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/accounts/{id}/restore": {
+            "post": {
+                "description": "Restore archived identity with disabled manual state; explicit enable is a separate action.",
+                "operationId": "restoreAccount",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/AccountId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "restoreAccount",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:archive"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/accounts/{id}/test": {
+            "post": {
+                "description": "Default model mode uses gemini-3.8-flash. connection mode only proves connectivity. Isolated target only; no failover or production context mutation.",
+                "operationId": "testAccount",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/AccountId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/TestRequest"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": false
+                },
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "testAccount",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:test"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/accounts/batch": {
+            "post": {
+                "description": "Process at most 100 target accounts; archive additionally requires accounts:archive. Drain up to 60 seconds; force explicitly permits interruption.",
+                "operationId": "batchAccounts",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/BatchRequest"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "batchAccounts",
+                "tags": ["accounts"],
+                "x-action-scopes": {
+                    "archive": ["accounts:write", "accounts:archive"],
+                    "disable": ["accounts:write"],
+                    "enable": ["accounts:write"]
+                },
+                "x-required-scopes": ["accounts:write"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/accounts/export": {
+            "post": {
+                "description": "Return credentials only to an explicitly authorized exporter. Do not log the response.",
+                "operationId": "exportAccounts",
+                "parameters": [],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ExportRequest"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AccountExportEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "exportAccounts",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:export"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/accounts/import": {
+            "post": {
+                "description": "Verify then commit and autoenable. Each clientRef is carried to its task item. Duplicate emails fail explicitly.",
+                "operationId": "importAccounts",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ImportRequest"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "importAccounts",
+                "tags": ["accounts"],
+                "x-required-scopes": ["accounts:write", "accounts:test"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/audit": {
+            "get": {
+                "description": "Paginated redacted audit records retained for 30 days.",
+                "operationId": "listAudit",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/Offset"
+                    },
+                    {
+                        "$ref": "#/components/parameters/Limit"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AuditPageEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "listAudit",
+                "tags": ["audit"],
+                "x-required-scopes": ["audit:read"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/settings": {
+            "get": {
+                "description": "Return allowlisted values and persistentKeys.",
+                "operationId": "getSettings",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SettingsSnapshotEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "getSettings",
+                "tags": ["settings"],
+                "x-required-scopes": ["settings:read"],
+                "x-response-mode": "sync"
+            },
+            "patch": {
+                "description": "Serialize validation/persistence/application with console updates. Validate all keys before mutation.",
+                "operationId": "patchSettings",
+                "parameters": [],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SettingsPatch"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SettingsUpdatedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "patchSettings",
+                "tags": ["settings"],
+                "x-required-scopes": ["settings:write"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/system/readiness": {
+            "get": {
+                "description": "HTTP 200 with data.ready false when not ready; no redirect or model fallback.",
+                "operationId": "getSystemReadiness",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ReadinessEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "getSystemReadiness",
+                "tags": ["system"],
+                "x-required-scopes": ["system:read"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/system/reload-auth": {
+            "post": {
+                "description": "Reconcile external credential files and metadata, then safely rebalance.",
+                "operationId": "reloadAuth",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskAcceptedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Accepted durable task; poll GET /api/manage/v1/tasks/{id}."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "reloadAuth",
+                "tags": ["system"],
+                "x-required-scopes": ["accounts:write"],
+                "x-response-mode": "task"
+            }
+        },
+        "/api/manage/v1/system/status": {
+            "get": {
+                "description": "Read safe operational status.",
+                "operationId": "getSystemStatus",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SystemStatusEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "getSystemStatus",
+                "tags": ["system"],
+                "x-required-scopes": ["system:read"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/tasks": {
+            "get": {
+                "description": "List retained tasks; queued/running are nonterminal.",
+                "operationId": "listTasks",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/Offset"
+                    },
+                    {
+                        "$ref": "#/components/parameters/Limit"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskPageEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "listTasks",
+                "tags": ["tasks"],
+                "x-required-scopes": ["tasks:read"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/tasks/{id}": {
+            "get": {
+                "description": "Read status, counts, per-item progress/stage/errors/clientRef and createdByKeyId.",
+                "operationId": "getTask",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/TaskId"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "getTask",
+                "tags": ["tasks"],
+                "x-required-scopes": ["tasks:read"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/tasks/{id}/cancel": {
+            "post": {
+                "description": "Request cooperative cancellation; response may still be running until in-flight work reaches a cancellation point. Already committed work is not rolled back.",
+                "operationId": "cancelTask",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/TaskId"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TaskEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "cancelTask",
+                "tags": ["tasks"],
+                "x-required-scopes": ["tasks:write"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/manage/v1/usage": {
+            "get": {
+                "description": "Paginated, redacted usage records with target-account attribution.",
+                "operationId": "listUsage",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/Offset"
+                    },
+                    {
+                        "$ref": "#/components/parameters/Limit"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/UsagePageEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ManagementBearer": []
+                    }
+                ],
+                "summary": "listUsage",
+                "tags": ["usage"],
+                "x-required-scopes": ["usage:read"],
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/management-keys": {
+            "get": {
+                "description": "Console-password session only. Never return token hashes or token plaintext.",
+                "operationId": "listManagementKeys",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/Offset"
+                    },
+                    {
+                        "$ref": "#/components/parameters/Limit"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/KeyPageEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ConsoleSession": []
+                    }
+                ],
+                "summary": "listManagementKeys",
+                "tags": ["Management keys"],
+                "x-required-scopes": [],
+                "x-required-session-auth-method": "console_password",
+                "x-response-mode": "sync"
+            },
+            "post": {
+                "description": "Console-password session only. Expand UI readonly/operator/admin templates to explicit scopes. Return plaintext token exactly once.",
+                "operationId": "createManagementKey",
+                "parameters": [],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/KeyCreateRequest"
+                            }
+                        }
+                    },
+                    "description": "Maximum JSON body: 10 MiB.",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/KeyCreatedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ConsoleSession": []
+                    }
+                ],
+                "summary": "createManagementKey",
+                "tags": ["Management keys"],
+                "x-required-scopes": [],
+                "x-required-session-auth-method": "console_password",
+                "x-response-mode": "sync"
+            }
+        },
+        "/api/management-keys/{id}": {
+            "delete": {
+                "description": "Revoke key immediately; cancel queued writes. Running work remains attributed to the creating key.",
+                "operationId": "revokeManagementKey",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/KeyId"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/KeyRevokedEnvelope"
+                                }
+                            }
+                        },
+                        "description": "Success."
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/Error400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Error401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Error403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/Error404"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/Error405"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Error409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/Error413"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/Error429"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/Error500"
+                    }
+                },
+                "security": [
+                    {
+                        "ConsoleSession": []
+                    }
+                ],
+                "summary": "revokeManagementKey",
+                "tags": ["Management keys"],
+                "x-required-scopes": [],
+                "x-required-session-auth-method": "console_password",
+                "x-response-mode": "sync"
+            }
+        }
+    },
+    "security": [
+        {
+            "ManagementBearer": []
+        }
+    ],
+    "servers": [
+        {
+            "description": "Same origin as the deployed service; examples use an isolated localhost server.",
+            "url": "/"
+        }
+    ],
+    "x-error-catalog": {
+        "ACCOUNT_BUSY": {
+            "description": "Account did not drain within 60 seconds; no forced interruption without force:true.",
+            "httpStatus": 409
+        },
+        "CANCELLED": {
+            "description": "Cooperative cancellation stopped uncommitted task work.",
+            "httpStatus": null
+        },
+        "CONSOLE_PASSWORD_REQUIRED": {
+            "description": "Key administration requires a fresh console-password session; model-key or old sessions do not qualify.",
+            "httpStatus": 403
+        },
+        "DUPLICATE_ACCOUNT": {
+            "description": "Account email already exists; import never replaces existing credentials.",
+            "httpStatus": 409
+        },
+        "FORBIDDEN": {
+            "description": "Authenticated key lacks a required scope.",
+            "httpStatus": 403
+        },
+        "IDEMPOTENCY_CONFLICT": {
+            "description": "The same management key and Idempotency-Key were used with different canonical content.",
+            "httpStatus": 409
+        },
+        "IDEMPOTENCY_KEY_REQUIRED": {
+            "description": "A task submission omitted Idempotency-Key.",
+            "httpStatus": 400
+        },
+        "INTERNAL_ERROR": {
+            "description": "Unexpected failure; message is redacted.",
+            "httpStatus": 500
+        },
+        "INTERRUPTED": {
+            "description": "Process restarted while the task was running; no automatic replay.",
+            "httpStatus": null
+        },
+        "INVALID_CREDENTIALS": {
+            "description": "Invalid Playwright storage state or forbidden management control fields.",
+            "httpStatus": 400
+        },
+        "INVALID_REQUEST": {
+            "description": "Malformed JSON, invalid field, ID, pagination or unknown setting.",
+            "httpStatus": 400
+        },
+        "INVALID_STATE": {
+            "description": "Requested transition is not valid in the current account/task state.",
+            "httpStatus": 409
+        },
+        "METHOD_NOT_ALLOWED": {
+            "description": "Known management path does not support this method; no model fallback.",
+            "httpStatus": 405
+        },
+        "NOT_FOUND": {
+            "description": "Resource or management route does not exist.",
+            "httpStatus": 404
+        },
+        "PAYLOAD_TOO_LARGE": {
+            "description": "Body exceeds 10 MiB, credentials exceed 1 MiB, or batch exceeds 100 items.",
+            "httpStatus": 413
+        },
+        "PERSISTENCE_ERROR": {
+            "description": "Durable write failed; do not report a successful mutation.",
+            "httpStatus": 500
+        },
+        "RATE_LIMITED": {
+            "description": "Management admission limit reached; retry later.",
+            "httpStatus": 429
+        },
+        "UNAUTHORIZED": {
+            "description": "Missing, invalid, expired or revoked management bearer token.",
+            "httpStatus": 401
+        },
+        "VERIFICATION_FAILED": {
+            "description": "Task item failed target-account verification; never fail over to another account.",
+            "httpStatus": null
+        },
+        "VERIFICATION_TIMEOUT": {
+            "description": "Task item exceeded overall 10 minute verifier deadline.",
+            "httpStatus": null
+        },
+        "VERSION_CONFLICT": {
+            "description": "Credential/state changed after verification began; stale commit rejected.",
+            "httpStatus": 409
+        }
+    },
+    "x-implementation-status": "contract-only; legacy baseline tested separately; wave-2 and live gates pending",
+    "x-limits": {
+        "batchItems": 100,
+        "bodyBytes": 10485760,
+        "credentialBytes": 1048576,
+        "defaultLimit": 50,
+        "drainTimeoutMs": 60000,
+        "maxLimit": 200,
+        "retentionDays": 30,
+        "verificationConcurrency": 1,
+        "verificationTimeoutMs": 600000
+    },
+    "x-scope-templates": {
+        "admin": [
+            "system:read",
+            "accounts:read",
+            "accounts:write",
+            "accounts:test",
+            "accounts:export",
+            "accounts:archive",
+            "settings:read",
+            "settings:write",
+            "usage:read",
+            "audit:read",
+            "tasks:read",
+            "tasks:write"
+        ],
+        "operator": [
+            "system:read",
+            "accounts:read",
+            "accounts:write",
+            "accounts:test",
+            "settings:read",
+            "usage:read",
+            "tasks:read",
+            "tasks:write"
+        ],
+        "readonly": ["system:read", "accounts:read", "settings:read", "usage:read", "audit:read", "tasks:read"]
+    }
+}

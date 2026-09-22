@@ -1,0 +1,34 @@
+[
+    {
+        "accountName": "fixture-alpha@example.invalid",
+        "cookies": [
+            {
+                "domain": "example.invalid",
+                "expires": -1,
+                "httpOnly": true,
+                "name": "fixture",
+                "path": "/",
+                "sameSite": "Lax",
+                "secure": true,
+                "value": "synthetic-alpha-only"
+            }
+        ],
+        "origins": []
+    },
+    {
+        "accountName": "fixture-beta@example.invalid",
+        "cookies": [
+            {
+                "domain": "example.invalid",
+                "expires": -1,
+                "httpOnly": true,
+                "name": "fixture",
+                "path": "/",
+                "sameSite": "Lax",
+                "secure": true,
+                "value": "synthetic-beta-only"
+            }
+        ],
+        "origins": []
+    }
+]
