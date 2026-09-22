@@ -1340,7 +1340,9 @@
                                 <span class="label"
                                     ><span
                                         >{{ t("autoHealProbeIntervalMinutes")
-                                        }}<EnvVarTooltip env-var="AUTOHEAL_PROBE_INTERVAL_MS" doc-section="proxy-config"
+                                        }}<EnvVarTooltip
+                                            env-var="AUTOHEAL_PROBE_INTERVAL_MS"
+                                            doc-section="proxy-config"
                                     /></span>
                                 </span>
                                 <el-input-number
@@ -2608,7 +2610,6 @@
                     </section>
                 </div>
 
-
                 <div class="full-width-section">
                     <section class="status-card records-card">
                         <div class="card-header-v2">
@@ -2933,9 +2934,8 @@ const t = (key, options) => {
 const statsState = reactive({
     accounts: [],
     records: [],
-    startedAt: null,
-    totalRecords: null,
     recordsTruncated: false,
+    startedAt: null,
     summary: {
         abortedCount: 0,
         activeRequests: 0,
@@ -2949,6 +2949,7 @@ const statsState = reactive({
         uniqueAccountPairs: 0,
         uptimeSeconds: 0,
     },
+    totalRecords: null,
 });
 
 // Time range filter: 'all' | '1h' | '6h' | '24h' | '7d' | '30d' | 'custom'
@@ -3386,7 +3387,6 @@ const filteredSummary = computed(() => {
         uniqueAccountPairs: uniqueAccounts.size,
     };
 });
-
 
 const translateLabel = value => {
     if (!value) return "-";
