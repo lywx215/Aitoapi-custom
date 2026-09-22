@@ -21,6 +21,7 @@
     "test:crashloop-autoheal": "node scripts/tests/crashLoopAutoHeal.test.js",
     "test:quota": "node scripts/tests/quotaCircuitBreaker.test.js",
     "test:autoheal-probe": "node scripts/tests/autoHealIsolatedProbe.test.js",
+    "test:upstream-improvements": "node scripts/tests/upstreamImprovements.test.js",
     "prestart": "npm run build:ui",
     "save-auth": "node scripts/auth/saveAuth.js",
     "setup-auth": "node scripts/auth/setupAuth.js",

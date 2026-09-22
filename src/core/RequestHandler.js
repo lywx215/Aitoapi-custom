@@ -877,7 +877,7 @@ class RequestHandler {
                 this.logger.warn(`[Routing] Quota disable failed for account #${authIndex}: ${error.message}`)
             );
         }
-        this._autoDisableAccountForStatus(authIndex, errorDetails);
+        this._autoDisableAccountForStatus(authIndex, { ...errorDetails, modelName });
     }
 
     _shouldSwitchImmediatelyForStatus(status) {
@@ -890,6 +890,21 @@ class RequestHandler {
 
     _autoDisableAccountForStatus(authIndex, errorDetails) {
         const status = Number(errorDetails?.status);
+        const modelName = this._normalizeRouteModel(errorDetails?.modelName);
+        // A model-scoped 403 means that this credential cannot use the
+        // requested model (for example, a preview model is not enabled for
+        // the account).  It is not evidence of an account-level ban.  Keep
+        // the account in rotation for other models such as gemini-3.8-flash;
+        // the request-level retry path can still move this request to another
+        // account.  Page/account probes do not carry modelName and therefore
+        // retain the account-level 403 quarantine behavior.
+        if (status === 403 && modelName && errorDetails?.accountLevel !== true) {
+            this.logger.warn(
+                `[Routing] Model-scoped HTTP 403 for "${modelName}" on account #${authIndex}; ` +
+                    "keeping the account enabled for other models."
+            );
+            return false;
+        }
         const configured = Array.isArray(this.config?.autoDisableStatusCodes)
             ? this.config.autoDisableStatusCodes
             : [401, 403];
@@ -1170,10 +1185,10 @@ class RequestHandler {
 
         const status = Number(errorDetails?.status);
         this._recordUsageAttemptError(requestId, source, errorDetails);
-        this._autoDisableAccountForStatus(source, errorDetails);
         const modelName = this._normalizeRouteModel(
             errorDetails?.modelName || this.requestModelBindings.get(requestId)
         );
+        this._autoDisableAccountForStatus(source, { ...errorDetails, modelName });
         if (status === 429) {
             const state = this._getAccountRouteState(source);
             const modelCooldownUntil = modelName ? state.modelCooldowns?.[modelName] || 0 : state.cooldownUntil;
@@ -4864,7 +4879,10 @@ class RequestHandler {
                 this._cancelCurrentAttemptBeforeRetry(proxyRequest, currentQueueAuthIndex);
 
                 const errorStatus = Number(errorPayload?.status);
-                this._autoDisableAccountForStatus(currentQueueAuthIndex, errorPayload);
+                this._autoDisableAccountForStatus(currentQueueAuthIndex, {
+                    ...errorPayload,
+                    modelName: this._getProxyRequestModel(proxyRequest),
+                });
                 if (errorStatus === 429) {
                     this._markAccount429ForModel(
                         currentQueueAuthIndex,
@@ -5807,7 +5825,8 @@ class RequestHandler {
 
         // Pre-process native Google requests
         // 1. Ensure thoughtSignature for functionCall (not functionResponse)
-        // 2. Sanitize tools (remove unsupported fields, convert type to uppercase)
+        // 2. Normalize tool schema type values
+        // 3. Normalize responseSchema type values to Google Type enums
         if (req.method === "POST" && bodyObj) {
             if (bodyObj.contents) {
                 const removedTrailingTurns = FormatConverter.removeUnsupportedTrailingModelTurns(bodyObj.contents);
@@ -5821,6 +5840,9 @@ class RequestHandler {
             }
             if (bodyObj.tools) {
                 this.formatConverter.sanitizeGeminiTools(bodyObj);
+            }
+            if (bodyObj.generationConfig?.responseSchema) {
+                this.formatConverter.normalizeGeminiResponseSchema(bodyObj);
             }
         }
 

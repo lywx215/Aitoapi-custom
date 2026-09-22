@@ -167,6 +167,27 @@ const testConfiguredStatusAutoDisablesAccount = async () => {
     assert.strictEqual(disabled.metadata.status, 403);
 };
 
+const testModelScopedForbiddenDoesNotDisableAccount = async () => {
+    const { handler } = makeHandler();
+    let disableCount = 0;
+    handler.authSource = {
+        availableIndices: [0, 1],
+        disableAuth: async () => {
+            disableCount += 1;
+            return true;
+        },
+        isDisabled: () => false,
+        isUnavailable: () => false,
+    };
+    handler._autoDisableAccountForStatus(0, {
+        status: 403,
+        modelName: "gemini-3.5-flash",
+        message: "PERMISSION_DENIED: model is not available for this account",
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(disableCount, 0);
+};
+
 const testAutoDisableCleanupIsSingleFlight = async () => {
     const { handler } = makeHandler();
     let closeCount = 0;
@@ -417,6 +438,7 @@ const testUsageThresholdFallsBackToHealthySingleAccount = async () => {
     testExpiredAndRemovedAccountsAreNotRouted();
     testModelNormalization();
     await testConfiguredStatusAutoDisablesAccount();
+    await testModelScopedForbiddenDoesNotDisableAccount();
     await testAutoDisableCleanupIsSingleFlight();
     await testAlreadyDisabledAccountStillGetsCleanup();
     testTodayAccountModelStats();
