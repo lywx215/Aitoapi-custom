@@ -412,14 +412,22 @@ class ProxyServerSystem extends EventEmitter {
         // Management namespaces own authentication, bounded parsing and terminal
         // errors. Never pass their requests to the model proxy fallback.
         app.use((req, res, next) => {
+            // Classify the namespace before URL dot-segment normalization too.
+            // Decode valid ASCII escapes independently so a malformed suffix
+            // cannot hide an otherwise recognizable encoded management prefix.
+            const decodedPath = req.path.replace(/%([a-f0-9]{2})/gi, (_, hex) =>
+                String.fromCharCode(parseInt(hex, 16))
+            );
+            const namespace = /^\/api\/(?:manage|management-keys)(?:\/|$)/i;
+            const decodedManaged = namespace.test(decodedPath.replace(/\/{2,}/g, "/"));
             let normalized;
             try {
                 normalized = new URL(decodeURIComponent(req.path).replace(/\/{2,}/g, "/"), "http://local").pathname;
             } catch {
                 normalized = req.path;
             }
-            const managed = /^\/api\/(?:manage|management-keys)(?:\/|$)/i.test(normalized);
-            if (managed && normalized !== req.path) {
+            const managed = decodedManaged || namespace.test(normalized);
+            if (managed && (normalized !== req.path || decodedPath !== req.path)) {
                 return res.status(400).json({
                     error: { code: "INVALID_REQUEST", message: "Use the canonical management API path." },
                     requestId: require("crypto").randomUUID(),
