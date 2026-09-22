@@ -16,7 +16,6 @@ const BOOLEAN_KEYS = Object.freeze([
     "checkUpdate",
     "debugMode",
     "enableAuthUpdate",
-    "enableUsageStats",
     "forceCodeExecution",
     "forceThinking",
     "forceUrlContext",

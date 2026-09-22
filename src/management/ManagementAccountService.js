@@ -59,7 +59,7 @@ class ManagementAccountService {
     _model(body) {
         if (
             body.model !== undefined &&
-            (typeof body.model !== "string" || !body.model.trim() || body.model.length > 256)
+            (typeof body.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(body.model))
         )
             throw failure("INVALID_REQUEST");
         return body.model || MODEL;
@@ -123,9 +123,17 @@ class ManagementAccountService {
             object(body, ["items", "model"], ["items"]);
             if (!Array.isArray(body.items) || !body.items.length) throw failure("INVALID_REQUEST");
             if (body.items.length > 100) throw failure("PAYLOAD_TOO_LARGE");
+            const references = new Set();
             const items = body.items.map(item => {
                 object(item, ["clientRef", "credentials"], ["clientRef", "credentials"]);
-                if (typeof item.clientRef !== "string") throw failure("INVALID_REQUEST");
+                if (
+                    typeof item.clientRef !== "string" ||
+                    !item.clientRef.trim() ||
+                    item.clientRef.length > 128 ||
+                    references.has(item.clientRef)
+                )
+                    throw failure("INVALID_REQUEST");
+                references.add(item.clientRef);
                 return {
                     clientRef: item.clientRef,
                     credentials: ManagementAccountService.credentials(item.credentials),
@@ -487,6 +495,12 @@ class ManagementAccountService {
         const browserConnected = !!browser?.browser?.isConnected?.();
         const isSystemBusy = !!this.system.requestHandler?.isSystemBusy;
         const enabledAccountCount = accounts.filter(r => this._account(r).enabled).length;
+        const hasReadyAccount = accounts.some(
+            row =>
+                this._account(row).enabled &&
+                !this.system.managementRuntime?.isBlocked?.(row.index) &&
+                this.system.connectionRegistry?.getConnectionByAuth?.(row.index, false)?.readyState === 1
+        );
         return {
             accountCount: accounts.filter(r => !r.archived).length,
             activeContextsCount: browser?.contexts?.size || 0,
@@ -495,7 +509,7 @@ class ManagementAccountService {
                 accounts.find(r => r.index === browser?.currentAuthIndex && !r.archived)?.accountId || null,
             enabledAccountCount,
             isSystemBusy,
-            ready: browserConnected && !isSystemBusy && enabledAccountCount > 0,
+            ready: browserConnected && !isSystemBusy && hasReadyAccount,
         };
     }
     readiness() {
@@ -505,6 +519,7 @@ class ManagementAccountService {
                 { name: "browser", ready: status.browserConnected },
                 { name: "accounts", ready: status.enabledAccountCount > 0 },
                 { name: "system", ready: !status.isSystemBusy },
+                { name: "model_connection", ready: status.ready },
             ],
             ready: status.ready,
         };

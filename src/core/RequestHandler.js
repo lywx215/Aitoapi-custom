@@ -32,7 +32,6 @@ const WS_CRASH_WINDOW_MS = 60000;
 const WS_CRASH_DROP_THRESHOLD = 3;
 const WS_CRASH_ISOLATE_MS = 120000;
 const WS_CRASH_DISABLE_AFTER_EPISODES = 2;
-const WS_CRASH_PROBE_INTERVAL_MS = 600000;
 // Default AutoHeal probe schedule (configurable at runtime via the panel):
 const AUTOHEAL_PROBE_INTERVAL_MS_DEFAULT = 5 * 60 * 60 * 1000; // 5 hours
 const AUTOHEAL_PROBE_TIMEOUT_MS_DEFAULT = 10 * 60 * 1000; // 10 minutes per account
@@ -65,7 +64,8 @@ class RequestHandler {
         // The switcher consults RequestHandler's WebSocket crash-loop quarantine
         // when picking the next account so recovery never lands back on a
         // flapping browser context.
-        this.authSwitcher.crashLoopChecker = authIndex => this._isInWsCrashLoop(authIndex);
+        this.authSwitcher.crashLoopChecker = authIndex =>
+            this._isInWsCrashLoop(authIndex) || this._isManagementBlocked(authIndex);
         this.formatConverter = new FormatConverter(logger, serverSystem);
 
         this.needsSwitchingAfterRequest = false;
@@ -109,13 +109,13 @@ class RequestHandler {
                 );
                 this.accountRouteState.set(authIndex, {
                     cooldownUntil: Number(saved.cooldownUntil) > now ? Number(saved.cooldownUntil) : 0,
-                    quotaDisabledUntil: Number(saved.quotaDisabledUntil) > now ? Number(saved.quotaDisabledUntil) : 0,
-                    quotaProbeEpisodes: Number(saved.quotaProbeEpisodes) || 0,
                     inFlight: 0,
                     lastError: saved.lastError || null,
                     lastStatus: Number.isFinite(Number(saved.lastStatus)) ? Number(saved.lastStatus) : null,
                     modelCooldowns,
                     modelRateLimitHits: saved.modelRateLimitHits || {},
+                    quotaDisabledUntil: Number(saved.quotaDisabledUntil) > now ? Number(saved.quotaDisabledUntil) : 0,
+                    quotaProbeEpisodes: Number(saved.quotaProbeEpisodes) || 0,
                     rateLimitHits: Number(saved.rateLimitHits) || 0,
                     usageCount: 0,
                     usageExhausted: false,
@@ -134,12 +134,12 @@ class RequestHandler {
         for (const [authIndex, state] of this.accountRouteState.entries()) {
             accounts[String(authIndex)] = {
                 cooldownUntil: state.cooldownUntil || 0,
-                quotaDisabledUntil: state.quotaDisabledUntil || 0,
-                quotaProbeEpisodes: state.quotaProbeEpisodes || 0,
                 lastError: state.lastError || null,
                 lastStatus: state.lastStatus || null,
                 modelCooldowns: state.modelCooldowns || {},
                 modelRateLimitHits: state.modelRateLimitHits || {},
+                quotaDisabledUntil: state.quotaDisabledUntil || 0,
+                quotaProbeEpisodes: state.quotaProbeEpisodes || 0,
                 rateLimitHits: state.rateLimitHits || 0,
             };
         }
@@ -191,13 +191,17 @@ class RequestHandler {
         return this._normalizeRouteModel(pathMatch ? pathMatch[1] : null);
     }
 
+    _isManagementBlocked(authIndex) {
+        return this.serverSystem?.managementRuntime?.isBlocked(authIndex) === true;
+    }
+
     async _warmStandbyForModel(modelName, excluded = []) {
         const routeModel = this._normalizeRouteModel(modelName);
         if (!routeModel || !this.browserManager?.ensureContextForAuth) return false;
         const excludedSet = new Set(excluded);
         const candidate = (this.authSource?.getRotationIndices?.() || this.authSource?.availableIndices || [])
             .filter(index => !excludedSet.has(index) && !this.browserManager.contexts.has(index))
-            .filter(index => !this._isAuthUnavailable(index))
+            .filter(index => !this._isAuthUnavailable(index) && !this._isManagementBlocked(index))
             .find(index => {
                 const state = this._getAccountRouteState(index);
                 return (
@@ -232,6 +236,7 @@ class RequestHandler {
             .map(([authIndex]) => authIndex)
             .filter(authIndex => {
                 if (excludedSet.has(authIndex)) return false;
+                if (this._isManagementBlocked(authIndex)) return false;
                 if (
                     Array.isArray(this.authSource?.availableIndices) &&
                     !this.authSource.availableIndices.includes(authIndex)
@@ -255,6 +260,7 @@ class RequestHandler {
                 Number.isInteger(current) &&
                 current >= 0 &&
                 !excludedSet.has(current) &&
+                !this._isManagementBlocked(current) &&
                 (!Array.isArray(this.authSource?.availableIndices) ||
                     this.authSource.availableIndices.includes(current)) &&
                 !this._isAuthUnavailable(current) &&
@@ -281,26 +287,27 @@ class RequestHandler {
         if (!Number.isInteger(authIndex) || authIndex < 0) {
             return {
                 cooldownUntil: 0,
+                crashLoopEpisodes: 0,
                 inFlight: 0,
                 lastError: null,
                 lastStatus: null,
                 modelCooldowns: {},
                 modelRateLimitHits: {},
+                quotaDisabledUntil: 0,
+                quotaProbeEpisodes: 0,
                 rateLimitHits: 0,
                 usageCount: 0,
                 usageExhausted: false,
                 usageExhaustedAt: 0,
+                wsCrashLoopUntil: 0,
                 wsDropCount: 0,
                 wsDropWindowStart: 0,
-                wsCrashLoopUntil: 0,
-                crashLoopEpisodes: 0,
-                quotaDisabledUntil: 0,
-                quotaProbeEpisodes: 0,
             };
         }
         if (!this.accountRouteState.has(authIndex)) {
             this.accountRouteState.set(authIndex, {
                 cooldownUntil: 0,
+                crashLoopEpisodes: 0,
                 inFlight: 0,
                 lastError: null,
                 lastStatus: null,
@@ -310,10 +317,9 @@ class RequestHandler {
                 usageCount: 0,
                 usageExhausted: false,
                 usageExhaustedAt: 0,
+                wsCrashLoopUntil: 0,
                 wsDropCount: 0,
                 wsDropWindowStart: 0,
-                wsCrashLoopUntil: 0,
-                crashLoopEpisodes: 0,
             });
         }
         const state = this.accountRouteState.get(authIndex);
@@ -491,7 +497,7 @@ class RequestHandler {
     async _probeAndRestoreAccount(authIndex, reason = "crash_loop") {
         if (this.authSwitcher?.isSystemBusy) {
             this.logger.info(`[AutoHeal] System busy, skipping probe for #${authIndex}.`);
-            return { skipped: true, reason: "busy" };
+            return { reason: "busy", skipped: true };
         }
         const metadata = this.authSource.store?.getMetadata(authIndex);
         const expectedVersions = metadata
@@ -501,7 +507,7 @@ class RequestHandler {
               }
             : {};
         if (this.authSource.store && (!metadata || metadata.archived)) {
-            return { skipped: true, reason: "account_unavailable" };
+            return { reason: "account_unavailable", skipped: true };
         }
         // Probe = isolated verification: launch a throwaway browser OUTSIDE the
         // MAX_CONTEXTS pool, verify page + in-page WebSocket, then enable the
@@ -514,12 +520,12 @@ class RequestHandler {
             );
             if (!verified) {
                 this.logger.warn(`[AutoHeal] #${authIndex} isolated probe returned false, keeping disabled.`);
-                return { restored: false, reason: "probe_failed" };
+                return { reason: "probe_failed", restored: false };
             }
             const enabled = await this.authSource.enableAuth(authIndex, expectedVersions);
             if (!enabled) {
                 this.logger.warn(`[AutoHeal] enableAuth(#${authIndex}) returned false, keeping disabled.`);
-                return { restored: false, reason: "enable_failed" };
+                return { reason: "enable_failed", restored: false };
             }
             // Healthy: clear the failure counters so the account starts clean.
             const state = this._getAccountRouteState(authIndex);
@@ -535,7 +541,7 @@ class RequestHandler {
             return { restored: true };
         } catch (error) {
             if (["VERSION_CONFLICT", "ACCOUNT_NOT_FOUND"].includes(error.code)) {
-                return { restored: false, reason: "account_changed" };
+                return { reason: "account_changed", restored: false };
             }
             // Not healthy yet: keep the account disabled (persisted) and retry on
             // the next probe cycle — no episode cap, we probe forever.
@@ -555,7 +561,7 @@ class RequestHandler {
                 `[AutoHeal] Account #${authIndex} probe failed (${error.message}), kept disabled. ` +
                     `Will retry next cycle (probing never gives up).`
             );
-            return { restored: false, reason: error.message };
+            return { reason: error.message, restored: false };
         }
     }
 
@@ -566,6 +572,15 @@ class RequestHandler {
      */
     async _removeForbiddenAccounts(indices) {
         for (const authIndex of indices) {
+            const metadata = this.authSource.store?.getMetadata(authIndex);
+            if (this.authSource.store && (!metadata || metadata.archived || metadata.disabledReason !== "forbidden"))
+                continue;
+            const expectedVersions = metadata
+                ? {
+                      expectedCredentialVersion: metadata.credentialVersion,
+                      expectedStateVersion: metadata.stateVersion,
+                  }
+                : {};
             const name = this.authSource?.accountNameMap?.get?.(authIndex) || "unknown";
             this.logger.warn(
                 `[AutoHeal] Account #${authIndex} (${name}) is forbidden (Google ban) — removing from pool ` +
@@ -578,7 +593,7 @@ class RequestHandler {
                     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
                     fs.copyFileSync(src, path.join(REMOVED_AUTH_BACKUP_DIR, `auth-${authIndex}-${stamp}.json`));
                 }
-                await this.authSource.removeAuth(authIndex);
+                await this.authSource.removeAuth(authIndex, expectedVersions);
                 this.logger.warn(`[AutoHeal] Account #${authIndex} (${name}) removed.`);
             } catch (e) {
                 this.logger.error(`[AutoHeal] Failed to remove forbidden account #${authIndex}: ${e.message}`);
@@ -1153,6 +1168,12 @@ class RequestHandler {
         if (typeof requestId !== "string") return;
         if (Number.isInteger(authIndex) && authIndex >= 0) {
             const previous = this.requestAuthBindings.get(requestId);
+            if (previous !== authIndex && this._isManagementBlocked(authIndex)) {
+                throw Object.assign(new Error("Account is draining for maintenance."), {
+                    code: "ACCOUNT_DRAINING",
+                    status: 503,
+                });
+            }
             if (previous !== authIndex && Number.isInteger(previous) && previous >= 0) {
                 const previousState = this._getAccountRouteState(previous);
                 previousState.inFlight = Math.max(0, previousState.inFlight - 1);
@@ -5978,6 +5999,15 @@ class RequestHandler {
     }
 
     _forwardRequest(proxyRequest, authIndex = this.currentAuthIndex) {
+        if (
+            this._isManagementBlocked(authIndex) &&
+            this.requestAuthBindings.get(proxyRequest.request_id) !== authIndex
+        ) {
+            throw Object.assign(new Error("Account is draining for maintenance."), {
+                code: "ACCOUNT_DRAINING",
+                status: 503,
+            });
+        }
         const connection = this.connectionRegistry.getConnectionByAuth(authIndex);
         if (connection) {
             this.logger.debug(

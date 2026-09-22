@@ -1019,6 +1019,7 @@
                 </header>
 
                 <div class="dashboard-grid settings-grid">
+                    <ManagementKeys />
                     <!-- Version Information Card -->
                     <div class="status-card">
                         <h3 class="card-title">
@@ -2903,12 +2904,13 @@
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox, ElNotification } from "element-plus";
-import { CircleClose } from "@element-plus/icons-vue";
+import CircleClose from "../components/CircleCloseIcon.vue";
 import JSZip from "jszip";
 import escapeHtml from "../utils/escapeHtml";
 import I18n from "../utils/i18n";
 import { useTheme } from "../utils/useTheme";
 import EnvVarTooltip from "../components/EnvVarTooltip.vue";
+import ManagementKeys from "../components/ManagementKeys.vue";
 
 const router = useRouter();
 const fileInput = ref(null);
