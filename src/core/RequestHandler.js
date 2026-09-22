@@ -109,8 +109,7 @@ class RequestHandler {
                 );
                 this.accountRouteState.set(authIndex, {
                     cooldownUntil: Number(saved.cooldownUntil) > now ? Number(saved.cooldownUntil) : 0,
-                    quotaDisabledUntil:
-                        Number(saved.quotaDisabledUntil) > now ? Number(saved.quotaDisabledUntil) : 0,
+                    quotaDisabledUntil: Number(saved.quotaDisabledUntil) > now ? Number(saved.quotaDisabledUntil) : 0,
                     quotaProbeEpisodes: Number(saved.quotaProbeEpisodes) || 0,
                     inFlight: 0,
                     lastError: saved.lastError || null,
@@ -377,7 +376,7 @@ class RequestHandler {
             if (episodes >= WS_CRASH_DISABLE_AFTER_EPISODES) {
                 let disabled = false;
                 try {
-                    disabled = await this.authSource?.disableAuth?.(authIndex, { reason: "crash_loop" }) === true;
+                    disabled = (await this.authSource?.disableAuth?.(authIndex, { reason: "crash_loop" })) === true;
                 } catch (e) {
                     this.logger.error(`[System] Failed to auto-disable account #${authIndex}: ${e.message}`);
                 }
@@ -417,9 +416,10 @@ class RequestHandler {
 
     _startAutoHealTimer() {
         if (this.autoHealTimer) clearInterval(this.autoHealTimer);
-        const interval = Number(this.config?.autoHealProbeIntervalMs) > 0
-            ? Number(this.config.autoHealProbeIntervalMs)
-            : AUTOHEAL_PROBE_INTERVAL_MS_DEFAULT;
+        const interval =
+            Number(this.config?.autoHealProbeIntervalMs) > 0
+                ? Number(this.config.autoHealProbeIntervalMs)
+                : AUTOHEAL_PROBE_INTERVAL_MS_DEFAULT;
         this.autoHealTimer = setInterval(() => {
             this._runAutoHealProbe().catch(error => {
                 this.logger.error(`[AutoHeal] Probe cycle failed: ${error.message}`);
@@ -493,6 +493,16 @@ class RequestHandler {
             this.logger.info(`[AutoHeal] System busy, skipping probe for #${authIndex}.`);
             return { skipped: true, reason: "busy" };
         }
+        const metadata = this.authSource.store?.getMetadata(authIndex);
+        const expectedVersions = metadata
+            ? {
+                  expectedCredentialVersion: metadata.credentialVersion,
+                  expectedStateVersion: metadata.stateVersion,
+              }
+            : {};
+        if (this.authSource.store && (!metadata || metadata.archived)) {
+            return { skipped: true, reason: "account_unavailable" };
+        }
         // Probe = isolated verification: launch a throwaway browser OUTSIDE the
         // MAX_CONTEXTS pool, verify page + in-page WebSocket, then enable the
         // account. Probing NEVER gives up: failures are logged with the failure
@@ -506,7 +516,7 @@ class RequestHandler {
                 this.logger.warn(`[AutoHeal] #${authIndex} isolated probe returned false, keeping disabled.`);
                 return { restored: false, reason: "probe_failed" };
             }
-            const enabled = await this.authSource.enableAuth(authIndex);
+            const enabled = await this.authSource.enableAuth(authIndex, expectedVersions);
             if (!enabled) {
                 this.logger.warn(`[AutoHeal] enableAuth(#${authIndex}) returned false, keeping disabled.`);
                 return { restored: false, reason: "enable_failed" };
@@ -524,10 +534,13 @@ class RequestHandler {
             this.logger.error(`✅ [AutoHeal] Account #${authIndex} probed OK, restored to rotation.`);
             return { restored: true };
         } catch (error) {
+            if (["VERSION_CONFLICT", "ACCOUNT_NOT_FOUND"].includes(error.code)) {
+                return { restored: false, reason: "account_changed" };
+            }
             // Not healthy yet: keep the account disabled (persisted) and retry on
             // the next probe cycle — no episode cap, we probe forever.
             try {
-                await this.authSource.disableAuth(authIndex, { reason });
+                await this.authSource.disableAuth(authIndex, { reason }, expectedVersions);
             } catch (e) {
                 this.logger.warn(`[AutoHeal] Re-disable #${authIndex} failed: ${e.message}`);
             }
@@ -565,7 +578,7 @@ class RequestHandler {
                     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
                     fs.copyFileSync(src, path.join(REMOVED_AUTH_BACKUP_DIR, `auth-${authIndex}-${stamp}.json`));
                 }
-                this.authSource.removeAuth(authIndex);
+                await this.authSource.removeAuth(authIndex);
                 this.logger.warn(`[AutoHeal] Account #${authIndex} (${name}) removed.`);
             } catch (e) {
                 this.logger.error(`[AutoHeal] Failed to remove forbidden account #${authIndex}: ${e.message}`);
@@ -5006,7 +5019,9 @@ class RequestHandler {
                     // Routing-layer WS-not-ready: count it as a drop for this
                     // account so a never-ready context trips crash-loop
                     // quarantine instead of being re-picked on every retry.
-                    this.recordWsDisconnect(currentQueueAuthIndex >= 0 ? currentQueueAuthIndex : this.currentAuthIndex).catch(() => {});
+                    this.recordWsDisconnect(
+                        currentQueueAuthIndex >= 0 ? currentQueueAuthIndex : this.currentAuthIndex
+                    ).catch(() => {});
                     lastError = {
                         message: `WebSocket connection not ready before retry on account #${this.currentAuthIndex}.`,
                         status: 503,

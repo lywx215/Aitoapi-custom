@@ -11,6 +11,7 @@ const archiver = require("archiver");
 const VersionChecker = require("../utils/VersionChecker");
 const LoggingService = require("../utils/LoggingService");
 const UsageStatsService = require("../core/UsageStatsService");
+const RuntimeSettingsStore = require("../storage/RuntimeSettingsStore");
 
 /**
  * Status Routes Manager
@@ -23,6 +24,27 @@ class StatusRoutes {
         this.config = serverSystem.config;
         this.distIndexPath = serverSystem.distIndexPath;
         this.runtimeSettingsPath = path.join(process.cwd(), "configs", "runtime-settings.json");
+        this.config.debugMode = LoggingService.getLevel() === "DEBUG";
+        this.runtimeSettingsStore =
+            serverSystem.runtimeSettingsStore ||
+            new RuntimeSettingsStore({
+                config: this.config,
+                filePath: this.runtimeSettingsPath,
+                logger: this.logger,
+                onApplied: async ({ changedKeys, values }) => {
+                    if (changedKeys.includes("maxContexts")) await serverSystem.browserManager.rebalanceContextPool();
+                    if (changedKeys.some(key => key.startsWith("autoHealProbe"))) {
+                        serverSystem.requestHandler._startAutoHealTimer();
+                    }
+                    if (changedKeys.includes("debugMode")) {
+                        const level = values.debugMode ? "DEBUG" : "INFO";
+                        LoggingService.setLevel(level);
+                        this.lastBrowserLogUpdateCount = serverSystem.requestHandler.setBrowserLogLevel(level);
+                    }
+                    if (changedKeys.includes("logMaxCount")) this.logger.setDisplayLimit(values.logMaxCount);
+                },
+            });
+        serverSystem.runtimeSettingsStore = this.runtimeSettingsStore;
         this.versionChecker = new VersionChecker(this.logger);
         this.allowedSafetyThresholds = new Set([
             "HARM_BLOCK_THRESHOLD_UNSPECIFIED",
@@ -46,41 +68,27 @@ class StatusRoutes {
     }
 
     async _saveRuntimeSettings() {
-        const runtimeSettings = {
-            accountCooldownMaxMs: this.config.accountCooldownMaxMs,
-            accountCooldownMs: this.config.accountCooldownMs,
-            autoDisableStatusCodes: this.config.autoDisableStatusCodes,
-            autoHealProbeIntervalMs: this.config.autoHealProbeIntervalMs,
-            autoHealProbeTimeoutMs: this.config.autoHealProbeTimeoutMs,
-            maxContexts: this.config.maxContexts,
-            maxRetries: this.config.maxRetries,
-            retryDelay: this.config.retryDelay,
-        };
-        const directory = path.dirname(this.runtimeSettingsPath);
-        await fs.promises.mkdir(directory, { recursive: true });
-        const temporaryPath = `${this.runtimeSettingsPath}.tmp`;
-        await fs.promises.writeFile(temporaryPath, `${JSON.stringify(runtimeSettings, null, 2)}\n`, "utf8");
-        // Windows does not replace an existing destination with rename() on
-        // every supported filesystem. Remove only this exact generated file
-        // before moving the validated temporary file into place.
+        return this.runtimeSettingsStore.save();
+    }
+
+    async _changeSetting(res, setting, patch, toggle = false) {
         try {
-            await fs.promises.rm(this.runtimeSettingsPath, { force: true });
+            const result = toggle
+                ? await this.runtimeSettingsStore.toggle(setting)
+                : await this.runtimeSettingsStore.update(patch);
+            return res.status(200).json({
+                applied: result.applied,
+                message: result.applied ? "settingUpdateSuccess" : "settingApplyPending",
+                persisted: result.persisted,
+                setting,
+                value: result.values[setting] ?? patch,
+                ...(result.applicationError ? { applicationError: result.applicationError } : {}),
+            });
         } catch (error) {
-            // A single-file bind mount target cannot be unlinked (EBUSY on Linux).
-            // Fall back to rewriting the mounted file in place: keep the inode so
-            // the bind mount stays valid and truncate+write the new content.
-            const handle = await fs.promises.open(this.runtimeSettingsPath, "r+");
-            try {
-                await handle.truncate(0);
-                await handle.writeFile(`${JSON.stringify(runtimeSettings, null, 2)}\n`, "utf8");
-                await handle.sync();
-            } finally {
-                await handle.close();
-            }
-            await fs.promises.rm(temporaryPath, { force: true }).catch(() => {});
-            return;
+            return res
+                .status(error.status || 500)
+                .json({ error: error.code || "PERSIST_FAILED", message: "settingFailed" });
         }
-        await fs.promises.rename(temporaryPath, this.runtimeSettingsPath);
     }
 
     /**
@@ -379,7 +387,7 @@ class StatusRoutes {
 
                     for (const index of removed) {
                         try {
-                            authSource.removeAuth(index);
+                            await authSource.removeAuth(index);
                             removedIndices.push(index);
                         } catch (error) {
                             failed.push({ error: error.message, index });
@@ -459,13 +467,17 @@ class StatusRoutes {
             if (!authSource.initialIndices.includes(targetIndex)) {
                 return res.status(404).json({ message: "errorAccountNotFound" });
             }
-            const enabled = req.body?.enabled !== false;
+            if (typeof req.body?.enabled !== "boolean") {
+                return res.status(400).json({ message: "errorInvalidEnabled" });
+            }
+            const enabled = req.body.enabled;
+            let stateSaved = false;
+            let changed = false;
             try {
                 const mutate =
                     typeof browserManager._withContextPoolMutation === "function"
                         ? task => browserManager._withContextPoolMutation(task)
                         : task => task();
-                let changed = false;
                 await mutate(async () => {
                     changed = enabled
                         ? await authSource.enableAuth(targetIndex)
@@ -475,6 +487,7 @@ class StatusRoutes {
                     if (!changed && enabled && authSource.isUnavailable?.(targetIndex)) {
                         return;
                     }
+                    stateSaved = true;
                     if (!enabled) {
                         const wasCurrent = browserManager.currentAuthIndex === targetIndex;
                         connectionRegistry.closeMessageQueuesForAuth(targetIndex, "account_disabled");
@@ -498,18 +511,31 @@ class StatusRoutes {
                         this.logger.warn(`[Auth] Rebalance after account state change failed: ${error.message}`)
                     );
                 return res.status(200).json({
+                    changed,
+                    cleanupComplete: true,
                     enabled,
                     index: targetIndex,
                     message: enabled ? "accountEnableSuccess" : "accountDisableSuccess",
+                    persisted: true,
                     success: true,
                 });
             } catch (error) {
                 this.logger.error(
                     `[WebUI] Failed to ${enabled ? "enable" : "disable"} account #${targetIndex}: ${error.message}`
                 );
-                return res
-                    .status(500)
-                    .json({ error: error.message, message: enabled ? "accountEnableFailed" : "accountDisableFailed" });
+                return res.status(stateSaved ? 200 : error.status || 500).json({
+                    changed,
+                    cleanupComplete: false,
+                    enabled,
+                    error: error.code || error.message,
+                    message: stateSaved
+                        ? "accountStateSavedCleanupPending"
+                        : enabled
+                          ? "accountEnableFailed"
+                          : "accountDisableFailed",
+                    persisted: stateSaved,
+                    success: false,
+                });
             }
         });
 
@@ -544,6 +570,7 @@ class StatusRoutes {
 
             const successIndices = [];
             const failedIndices = [];
+            const cleanupPendingIndices = [];
 
             // Add invalid indices to failed list immediately
             for (const idx of invalidIndices) {
@@ -571,7 +598,7 @@ class StatusRoutes {
             // Delete auth files
             for (const targetIndex of validIndices) {
                 try {
-                    authSource.removeAuth(targetIndex);
+                    await authSource.removeAuth(targetIndex);
                     successIndices.push(targetIndex);
                     this.logger.warn(`[WebUI] Account #${targetIndex} deleted via batch delete.`);
                 } catch (error) {
@@ -605,6 +632,9 @@ class StatusRoutes {
                     await this.serverSystem.browserManager.closeContext(currentAuthIndex);
                     // 3. Then close WebSocket connection
                     this.serverSystem.connectionRegistry.closeConnectionByAuth(currentAuthIndex);
+                } catch (error) {
+                    cleanupPendingIndices.push(currentAuthIndex);
+                    this.logger.warn(`[Auth] Deleted account cleanup pending: #${currentAuthIndex}`);
                 } finally {
                     // Reset system busy flag after cleanup completes
                     if (!previousBusy) {
@@ -618,9 +648,13 @@ class StatusRoutes {
                 if (idx !== currentAuthIndex) {
                     this.logger.info(`[WebUI] Closing context and connection for deleted account #${idx}...`);
                     // Close context first so page is gone when _removeConnection checks
-                    await this.serverSystem.browserManager.closeContext(idx);
-                    // Then close WebSocket connection
-                    this.serverSystem.connectionRegistry.closeConnectionByAuth(idx);
+                    try {
+                        await this.serverSystem.browserManager.closeContext(idx);
+                        // Then close WebSocket connection
+                        this.serverSystem.connectionRegistry.closeConnectionByAuth(idx);
+                    } catch (error) {
+                        cleanupPendingIndices.push(idx);
+                    }
                 }
             }
 
@@ -631,8 +665,9 @@ class StatusRoutes {
                 });
             }
 
-            if (failedIndices.length > 0) {
+            if (failedIndices.length > 0 || cleanupPendingIndices.length > 0) {
                 return res.status(207).json({
+                    cleanupPendingIndices,
                     failedIndices,
                     message: "batchDeletePartial",
                     successCount: successIndices.length,
@@ -641,6 +676,7 @@ class StatusRoutes {
             }
 
             return res.status(200).json({
+                cleanupPendingIndices,
                 message: "batchDeleteSuccess",
                 successCount: successIndices.length,
                 successIndices,
@@ -769,9 +805,11 @@ class StatusRoutes {
             // that are about to be deleted
             await this.serverSystem.browserManager.abortBackgroundPreload();
 
+            let credentialRemoved = false;
             try {
                 // Delete auth file
-                authSource.removeAuth(targetIndex);
+                await authSource.removeAuth(targetIndex);
+                credentialRemoved = true;
 
                 // Reload auth sources to update internal state immediately
                 authSource.reloadAuthSources();
@@ -819,6 +857,14 @@ class StatusRoutes {
                 });
             } catch (error) {
                 this.logger.error(`[WebUI] Failed to delete account #${targetIndex}: ${error.message}`);
+                if (credentialRemoved) {
+                    return res.status(200).json({
+                        cleanupComplete: false,
+                        index: targetIndex,
+                        message: "accountDeletedCleanupPending",
+                        persisted: true,
+                    });
+                }
                 return res.status(500).json({ error: error.message, message: "accountDeleteFailed" });
             }
         });
@@ -826,61 +872,35 @@ class StatusRoutes {
         app.put("/api/settings/streaming-mode", isAuthenticated, (req, res) => {
             const newMode = req.body.mode;
             if (newMode === "fake" || newMode === "real") {
-                this.config.streamingMode = newMode;
-                this.logger.info(
-                    `[WebUI] Streaming mode switched by authenticated user to: ${this.config.streamingMode}`
-                );
-                res.status(200).json({ message: "settingUpdateSuccess", setting: "streamingMode", value: newMode });
+                return this._changeSetting(res, "streamingMode", { streamingMode: newMode });
             } else {
                 res.status(400).json({ message: "errorInvalidMode" });
             }
         });
 
-        app.put("/api/settings/force-thinking", isAuthenticated, (req, res) => {
-            this.config.forceThinking = !this.config.forceThinking;
-            const statusText = this.config.forceThinking;
-            this.logger.info(`[WebUI] Force thinking toggle switched to: ${statusText}`);
-            res.status(200).json({ message: "settingUpdateSuccess", setting: "forceThinking", value: statusText });
-        });
+        app.put("/api/settings/force-thinking", isAuthenticated, (req, res) =>
+            this._changeSetting(res, "forceThinking", null, true)
+        );
 
-        app.put("/api/settings/force-web-search", isAuthenticated, (req, res) => {
-            this.config.forceWebSearch = !this.config.forceWebSearch;
-            const statusText = this.config.forceWebSearch;
-            this.logger.info(`[WebUI] Force web search toggle switched to: ${statusText}`);
-            res.status(200).json({ message: "settingUpdateSuccess", setting: "forceWebSearch", value: statusText });
-        });
+        app.put("/api/settings/force-web-search", isAuthenticated, (req, res) =>
+            this._changeSetting(res, "forceWebSearch", null, true)
+        );
 
-        app.put("/api/settings/force-code-execution", isAuthenticated, (req, res) => {
-            this.config.forceCodeExecution = !this.config.forceCodeExecution;
-            const statusText = this.config.forceCodeExecution;
-            this.logger.info(`[WebUI] Force code execution toggle switched to: ${statusText}`);
-            res.status(200).json({
-                message: "settingUpdateSuccess",
-                setting: "forceCodeExecution",
-                value: statusText,
-            });
-        });
+        app.put("/api/settings/force-code-execution", isAuthenticated, (req, res) =>
+            this._changeSetting(res, "forceCodeExecution", null, true)
+        );
 
-        app.put("/api/settings/force-url-context", isAuthenticated, (req, res) => {
-            this.config.forceUrlContext = !this.config.forceUrlContext;
-            const statusText = this.config.forceUrlContext;
-            this.logger.info(`[WebUI] Force URL context toggle switched to: ${statusText}`);
-            res.status(200).json({ message: "settingUpdateSuccess", setting: "forceUrlContext", value: statusText });
-        });
+        app.put("/api/settings/force-url-context", isAuthenticated, (req, res) =>
+            this._changeSetting(res, "forceUrlContext", null, true)
+        );
 
-        app.put("/api/settings/check-update", isAuthenticated, (req, res) => {
-            this.config.checkUpdate = !this.config.checkUpdate;
-            const statusText = this.config.checkUpdate;
-            this.logger.info(`[WebUI] Check update toggle switched to: ${statusText}`);
-            res.status(200).json({ message: "settingUpdateSuccess", setting: "checkUpdate", value: statusText });
-        });
+        app.put("/api/settings/check-update", isAuthenticated, (req, res) =>
+            this._changeSetting(res, "checkUpdate", null, true)
+        );
 
-        app.put("/api/settings/enable-auth-update", isAuthenticated, (req, res) => {
-            this.config.enableAuthUpdate = !this.config.enableAuthUpdate;
-            const statusText = this.config.enableAuthUpdate;
-            this.logger.info(`[WebUI] Enable auth update toggle switched to: ${statusText}`);
-            res.status(200).json({ message: "settingUpdateSuccess", setting: "enableAuthUpdate", value: statusText });
-        });
+        app.put("/api/settings/enable-auth-update", isAuthenticated, (req, res) =>
+            this._changeSetting(res, "enableAuthUpdate", null, true)
+        );
 
         app.put("/api/settings/safety-settings-threshold", isAuthenticated, (req, res) => {
             const newThreshold = String(req.body?.value || "")
@@ -891,82 +911,49 @@ class StatusRoutes {
                 return res.status(400).json({ error: "Invalid safety settings threshold", message: "settingFailed" });
             }
 
-            this.config.safetySettingsThreshold = newThreshold;
-            this.logger.info(`[WebUI] Safety settings threshold updated to: ${newThreshold}`);
-            return res.status(200).json({
-                message: "settingUpdateSuccess",
-                setting: "safetySettingsThreshold",
-                value: newThreshold,
-            });
+            return this._changeSetting(res, "safetySettingsThreshold", { safetySettingsThreshold: newThreshold });
         });
 
-        app.put("/api/settings/debug-mode", isAuthenticated, (req, res) => {
-            const currentLevel = LoggingService.getLevel();
-            const newLevel = currentLevel === "DEBUG" ? "INFO" : "DEBUG";
-            LoggingService.setLevel(newLevel);
-            this.logger.info(`[WebUI] Log level switched to: ${newLevel}`);
-
-            // Sync browser log level via WebSocket (broadcasts to all active contexts)
-            const updatedCount = this.serverSystem.requestHandler.setBrowserLogLevel(newLevel);
-            const browserSynced = updatedCount > 0;
-            if (!browserSynced) {
-                this.logger.warn(`[WebUI] Browser log level sync failed (no active connections)`);
+        app.put("/api/settings/debug-mode", isAuthenticated, async (req, res) => {
+            try {
+                const result = await this.runtimeSettingsStore.toggle("debugMode");
+                const updatedCount = this.lastBrowserLogUpdateCount || 0;
+                return res.status(200).json({
+                    applied: result.applied,
+                    browserSynced: updatedCount > 0,
+                    message: result.applied ? "settingUpdateSuccess" : "settingApplyPending",
+                    persisted: result.persisted,
+                    setting: "logLevel",
+                    updatedContexts: updatedCount,
+                    value: result.values.debugMode ? "debug" : "normal",
+                });
+            } catch (error) {
+                return res
+                    .status(error.status || 500)
+                    .json({ error: error.code || "PERSIST_FAILED", message: "settingFailed" });
             }
-
-            res.status(200).json({
-                browserSynced,
-                message: "settingUpdateSuccess",
-                setting: "logLevel",
-                updatedContexts: updatedCount,
-                value: newLevel === "DEBUG" ? "debug" : "normal",
-            });
         });
 
         app.put("/api/settings/log-max-count", isAuthenticated, (req, res) => {
             const { count } = req.body;
-            const newCount = parseInt(count, 10);
+            const newCount = Number(count);
 
-            if (Number.isFinite(newCount) && newCount > 0) {
-                this.logger.setDisplayLimit(newCount);
-                this.logger.info(`[WebUI] Log display limit updated to: ${newCount}`);
-                res.status(200).json({ message: "settingUpdateSuccess", setting: "logMaxCount", value: newCount });
+            if (Number.isInteger(newCount) && newCount > 0) {
+                return this._changeSetting(res, "logMaxCount", { logMaxCount: newCount });
             } else {
                 res.status(400).json({ error: "Invalid count", message: "settingFailed" });
             }
         });
 
         const updateNumericSetting = async (req, res, setting, { max, min = 0 } = {}) => {
+            if (!["number", "string"].includes(typeof req.body?.value) || String(req.body.value).trim() === "") {
+                return res.status(400).json({ error: `Invalid value for ${setting}.`, message: "settingFailed" });
+            }
             const value = Number(req.body?.value);
             if (!Number.isInteger(value) || value < min || (max !== undefined && value > max)) {
                 return res.status(400).json({ error: `Invalid value for ${setting}.`, message: "settingFailed" });
             }
-            if (setting === "accountCooldownMaxMs" && value < this.config.accountCooldownMs) {
-                return res.status(400).json({
-                    error: "Maximum account cooldown must be greater than or equal to the base cooldown.",
-                    message: "settingFailed",
-                });
-            }
-            if (setting === "accountCooldownMs" && value > this.config.accountCooldownMaxMs) {
-                this.config.accountCooldownMaxMs = value;
-            }
-            this.config[setting] = value;
-            try {
-                await this._saveRuntimeSettings();
-            } catch (error) {
-                this.logger.error(`[WebUI] Failed to persist numeric setting ${setting}: ${error.message}`);
-                return res.status(500).json({ error: "Failed to persist setting.", message: "settingFailed" });
-            }
-            this.logger.info(`[WebUI] Numeric setting ${setting} updated to ${value}`);
-            if (setting === "maxContexts") {
-                this.serverSystem.browserManager.rebalanceContextPool().catch(error => {
-                    this.logger.error(`[WebUI] Context pool rebalance failed: ${error.message}`);
-                });
-            }
-            return res.status(200).json({
-                message: "settingUpdateSuccess",
-                setting,
-                value,
-            });
+            return this._changeSetting(res, setting, { [setting]: value });
         };
 
         app.put("/api/settings/max-retries", isAuthenticated, (req, res) =>
@@ -984,16 +971,7 @@ class StatusRoutes {
                         .filter(value => Number.isInteger(value) && value >= 400 && value <= 599)
                 ),
             ];
-            this.config.autoDisableStatusCodes = codes;
-            try {
-                await this._saveRuntimeSettings();
-                this.logger.info(`[WebUI] Auto-disable status codes updated to: ${codes.join(", ")}`);
-                return res
-                    .status(200)
-                    .json({ message: "settingUpdateSuccess", setting: "autoDisableStatusCodes", value: codes });
-            } catch (error) {
-                return res.status(500).json({ error: error.message, message: "settingFailed" });
-            }
+            return this._changeSetting(res, "autoDisableStatusCodes", { autoDisableStatusCodes: codes });
         });
 
         app.put("/api/settings/max-contexts", isAuthenticated, (req, res) =>
@@ -1012,21 +990,24 @@ class StatusRoutes {
             const intervalMs = Number(req.body?.probeIntervalMs);
             const timeoutMs = Number(req.body?.probeTimeoutMs);
             if (!Number.isInteger(intervalMs) || intervalMs < 60000 || intervalMs > 604800000) {
-                return res.status(400).json({ error: "probeIntervalMs must be 60000..604800000", message: "settingFailed" });
+                return res
+                    .status(400)
+                    .json({ error: "probeIntervalMs must be 60000..604800000", message: "settingFailed" });
             }
             if (!Number.isInteger(timeoutMs) || timeoutMs < 30000 || timeoutMs > 3600000) {
-                return res.status(400).json({ error: "probeTimeoutMs must be 30000..3600000", message: "settingFailed" });
+                return res
+                    .status(400)
+                    .json({ error: "probeTimeoutMs must be 30000..3600000", message: "settingFailed" });
             }
-            this.config.autoHealProbeIntervalMs = intervalMs;
-            this.config.autoHealProbeTimeoutMs = timeoutMs;
             try {
-                await this._saveRuntimeSettings();
-                this.serverSystem.requestHandler._startAutoHealTimer();
-                this.logger.info(
-                    `[WebUI] AutoHeal probe updated: interval=${intervalMs}ms, timeout=${timeoutMs}ms (timer re-armed).`
-                );
+                const result = await this.runtimeSettingsStore.update({
+                    autoHealProbeIntervalMs: intervalMs,
+                    autoHealProbeTimeoutMs: timeoutMs,
+                });
                 return res.status(200).json({
-                    message: "settingUpdateSuccess",
+                    applied: result.applied,
+                    message: result.applied ? "settingUpdateSuccess" : "settingApplyPending",
+                    persisted: result.persisted,
                     setting: "autoheal-probe",
                     value: { probeIntervalMs: intervalMs, probeTimeoutMs: timeoutMs },
                 });
@@ -1051,24 +1032,8 @@ class StatusRoutes {
                 // while we're adding a new account
                 await this.serverSystem.browserManager.abortBackgroundPreload();
 
-                // Ensure directory exists
-                const configDir = path.join(process.cwd(), "configs", "auth");
-                if (!fs.existsSync(configDir)) {
-                    fs.mkdirSync(configDir, { recursive: true });
-                }
-
-                // If content is object, stringify it
-                const fileContent = typeof content === "object" ? JSON.stringify(content, null, 2) : content;
-
-                // Always use max index + 1 to ensure new auth is always the latest
-                // This simplifies dedup logic assumption: higher index = newer auth
-                const existingIndices = this.serverSystem.authSource.availableIndices || [];
-                const nextAuthIndex = existingIndices.length > 0 ? Math.max(...existingIndices) + 1 : 0;
-
+                const { index: nextAuthIndex } = await this.serverSystem.authSource.createAuth(content);
                 const newFilename = `auth-${nextAuthIndex}.json`;
-                const filePath = path.join(configDir, newFilename);
-
-                await fs.promises.writeFile(filePath, fileContent);
 
                 // Reload auth sources to pick up changes
                 this.serverSystem.authSource.reloadAuthSources();
@@ -1082,7 +1047,7 @@ class StatusRoutes {
                 res.status(200).json({ filename: newFilename, message: "File uploaded successfully" });
             } catch (error) {
                 this.logger.error(`[WebUI] Failed to write file: ${error.message}`);
-                res.status(500).json({ error: "Failed to save file" });
+                res.status(error.status || 500).json({ error: error.code || "Failed to save file" });
             }
         });
 
@@ -1102,17 +1067,7 @@ class StatusRoutes {
                 // while we're adding multiple new accounts
                 await this.serverSystem.browserManager.abortBackgroundPreload();
 
-                // Ensure directory exists
-                const configDir = path.join(process.cwd(), "configs", "auth");
-                if (!fs.existsSync(configDir)) {
-                    fs.mkdirSync(configDir, { recursive: true });
-                }
-
                 const results = [];
-
-                // Get starting index
-                const existingIndices = this.serverSystem.authSource.availableIndices || [];
-                let nextAuthIndex = existingIndices.length > 0 ? Math.max(...existingIndices) + 1 : 0;
 
                 // Write all files first, track each file's result
                 for (let i = 0; i < files.length; i++) {
@@ -1124,18 +1079,11 @@ class StatusRoutes {
                     }
 
                     try {
-                        // If content is object, stringify it
-                        const fileContent = typeof content === "object" ? JSON.stringify(content, null, 2) : content;
-
+                        const { index: nextAuthIndex } = await this.serverSystem.authSource.createAuth(content);
                         const newFilename = `auth-${nextAuthIndex}.json`;
-                        const filePath = path.join(configDir, newFilename);
-
-                        await fs.promises.writeFile(filePath, fileContent);
 
                         results.push({ filename: newFilename, index: i, success: true });
                         this.logger.info(`[WebUI] Batch upload: generated ${newFilename}`);
-
-                        nextAuthIndex++;
                     } catch (error) {
                         results.push({ error: error.message, index: i, success: false });
                         this.logger.error(`[WebUI] Batch upload failed for file ${i}: ${error.message}`);

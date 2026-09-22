@@ -468,30 +468,30 @@ class BrowserManager {
         }
 
         try {
-            const configDir = path.join(process.cwd(), "configs", "auth");
-            const authFilePath = path.join(configDir, `auth-${authIndex}.json`);
-
-            // Read original file content to preserve all fields (e.g. accountName, custom fields)
-            // Relies on AuthSource validation (checks valid index AND file existence)
-            const authData = this.authSource.getAuth(authIndex);
-            if (!authData) {
+            const metadata = this.authSource.store.getMetadata(authIndex);
+            if (!metadata || metadata.archived) {
                 this.logger.warn(
                     `[Auth Update] Auth source #${authIndex} returned no data (invalid index or file missing), skipping update.`
                 );
                 return;
             }
 
+            const expectedCredentialVersion = contextData.credentialVersion;
+            if (
+                !Number.isInteger(expectedCredentialVersion) ||
+                expectedCredentialVersion !== metadata.credentialVersion
+            ) {
+                this.logger.warn(`[Auth Update] Stale context for account #${authIndex}; skipping credential write.`);
+                return;
+            }
             const storageState = await contextData.context.storageState();
 
-            // Merge new credentials into existing data
-            authData.cookies = storageState.cookies;
-            authData.origins = storageState.origins;
-
-            // Note: We do NOT force-set accountName. If it was there, it stays; if not, it remains missing.
-            // This preserves the "missing state" as requested.
-
-            // Overwrite the file with merged data
-            await fs.promises.writeFile(authFilePath, JSON.stringify(authData, null, 2));
+            // Re-read under the account lock; never overwrite newer management
+            // flags or restore a credential replaced/deleted while exporting.
+            const updated = await this.authSource.store.mergeStorageState(authIndex, storageState, {
+                expectedCredentialVersion,
+            });
+            contextData.credentialVersion = updated.credentialVersion;
 
             this.logger.info(`[Auth Update] 💾 Successfully updated auth credentials for account #${authIndex}`);
         } catch (error) {
@@ -911,7 +911,10 @@ class BrowserManager {
                 // in-page WebSocket NEVER initializes and every probe timed
                 // out regardless of account health (2026-09-19 incident).
                 const continueClicked = await this._clickButtonByTextIfVisible(
-                    page, "Continue to the app", logPrefix, `popup "Continue to the app"`
+                    page,
+                    "Continue to the app",
+                    logPrefix,
+                    `popup "Continue to the app"`
                 );
                 if (continueClicked) {
                     this.logger.info(`${logPrefix} Found "Continue to the app" popup, clicked.`);
@@ -2332,6 +2335,7 @@ class BrowserManager {
             if (!storageStateObject) {
                 throw new Error(`Failed to get or parse auth source for index ${authIndex}.`);
             }
+            const credentialVersion = this.authSource.store?.getMetadata(authIndex)?.credentialVersion;
 
             // Viewport Randomization
             const randomWidth = 1920 + Math.floor(Math.random() * 50);
@@ -2463,6 +2467,7 @@ class BrowserManager {
             if (!this.abortedContexts.has(authIndex) && !(isBackgroundTask && this._backgroundPreloadAbort)) {
                 this.contexts.set(authIndex, {
                     context,
+                    credentialVersion,
                     healthMonitorInterval: null,
                     page,
                 });
