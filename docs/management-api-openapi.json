@@ -52,6 +52,16 @@
                     "type": "integer"
                 }
             },
+            "RequestedWith": {
+                "description": "Required on console management-key writes; session must come from console-password login. Cross-site/same-site Fetch-Metadata is rejected. If Origin is supplied it must exactly equal this request origin.",
+                "in": "header",
+                "name": "X-Requested-With",
+                "required": true,
+                "schema": {
+                    "enum": ["XMLHttpRequest"],
+                    "type": "string"
+                }
+            },
             "TaskId": {
                 "description": "Opaque taskId.",
                 "in": "path",
@@ -73,7 +83,7 @@
                         }
                     }
                 },
-                "description": "INVALID_REQUEST: Malformed JSON, invalid field, ID, pagination or unknown setting. INVALID_CREDENTIALS: Invalid Playwright storage state or forbidden management control fields. IDEMPOTENCY_KEY_REQUIRED: A task submission omitted Idempotency-Key."
+                "description": "IDEMPOTENCY_KEY_REQUIRED: A task submission omitted Idempotency-Key. INVALID_CREDENTIALS: Invalid Playwright storage state or forbidden management control fields. INVALID_REQUEST: Malformed JSON, invalid field, ID, pagination or unknown setting. INVALID_SETTINGS: Settings patch contains an unsupported field or invalid value. INVALID_INDEX: Account filesystem index is invalid. VERSION_REQUIRED: An internal guarded storage refresh omitted expectedCredentialVersion."
             },
             "Error401": {
                 "content": {
@@ -153,7 +163,7 @@
                         }
                     }
                 },
-                "description": "PERSISTENCE_ERROR: Durable write failed; do not report a successful mutation. INTERNAL_ERROR: Unexpected failure; message is redacted."
+                "description": "INTERNAL_ERROR: Unexpected failure; message is redacted. PERSISTENCE_ERROR: Durable write failed; do not report a successful mutation. AUDIT_PERSISTENCE_FAILED: Operation committed but audit persistence failed. Read the resource/task state before retrying. SETTINGS_PERSISTENCE_FAILED: Settings persistence failed; live configuration was not changed. SETTINGS_PERSISTENCE_RECOVERY_FAILED: Settings write and restoration both failed; live configuration was not changed and disk state needs inspection."
             }
         },
         "schemas": {
@@ -533,7 +543,15 @@
                     "VERIFICATION_FAILED",
                     "VERIFICATION_TIMEOUT",
                     "CANCELLED",
-                    "INTERRUPTED"
+                    "INTERRUPTED",
+                    "AUDIT_PERSISTENCE_FAILED",
+                    "INVALID_SETTINGS",
+                    "SETTINGS_PERSISTENCE_FAILED",
+                    "SETTINGS_PERSISTENCE_RECOVERY_FAILED",
+                    "SETTINGS_APPLICATION_FAILED",
+                    "ACCOUNT_NOT_FOUND",
+                    "INVALID_INDEX",
+                    "VERSION_REQUIRED"
                 ],
                 "type": "string"
             },
@@ -616,8 +634,8 @@
                         "$ref": "#/components/schemas/ManagementKey"
                     },
                     "token": {
-                        "description": "Shown once. mgmt_ prefix plus encoding of 32 cryptographically random bytes; only SHA-256 hash is persisted.",
-                        "pattern": "^mgmt_.+",
+                        "description": "Shown once. mgmt_ prefix plus base64url encoding of 32 random bytes; only SHA-256 is persisted.",
+                        "pattern": "^mgmt_[A-Za-z0-9_-]{43}$",
                         "readOnly": true,
                         "type": "string"
                     }
@@ -653,6 +671,7 @@
                         "items": {
                             "$ref": "#/components/schemas/Scope"
                         },
+                        "maxItems": 12,
                         "minItems": 1,
                         "type": "array",
                         "uniqueItems": true
@@ -887,6 +906,10 @@
                     "checkUpdate": {
                         "type": "boolean"
                     },
+                    "debugMode": {
+                        "description": "Temporary log-level flag; not persisted.",
+                        "type": "boolean"
+                    },
                     "enableAuthUpdate": {
                         "type": "boolean"
                     },
@@ -901,6 +924,12 @@
                     },
                     "forceWebSearch": {
                         "type": "boolean"
+                    },
+                    "logMaxCount": {
+                        "description": "Temporary console log display limit; not persisted.",
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
                     },
                     "maxContexts": {
                         "maximum": 1000,
@@ -981,7 +1010,18 @@
                 "description": "Persist candidate before applying live configuration. persisted:true/applied:false reports a durable change whose application callback failed; do not blindly resubmit.",
                 "properties": {
                     "applicationError": {
-                        "type": "string"
+                        "additionalProperties": false,
+                        "properties": {
+                            "code": {
+                                "enum": ["SETTINGS_APPLICATION_FAILED"],
+                                "type": "string"
+                            },
+                            "message": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["code", "message"],
+                        "type": "object"
                     },
                     "applied": {
                         "type": "boolean"
@@ -1045,6 +1085,10 @@
                     "checkUpdate": {
                         "type": "boolean"
                     },
+                    "debugMode": {
+                        "description": "Temporary log-level flag; not persisted.",
+                        "type": "boolean"
+                    },
                     "enableAuthUpdate": {
                         "type": "boolean"
                     },
@@ -1059,6 +1103,12 @@
                     },
                     "forceWebSearch": {
                         "type": "boolean"
+                    },
+                    "logMaxCount": {
+                        "description": "Temporary console log display limit; not persisted.",
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
                     },
                     "maxContexts": {
                         "maximum": 1000,
@@ -1538,9 +1588,9 @@
         }
     },
     "info": {
-        "description": "Wave 1 contract artifact, not evidence of implementation. Normative shared constraints: docs/management-api-contract.md. Operation-specific scopes, detailed response fields, error-code spelling and sync/task choices are integration refinements requiring T0/T4/T5 conformance review. All examples are synthetic. No live model verification has been performed.",
+        "description": "Local simulated acceptance in progress on real services. LIVE-01 is deferred by explicit user scope and is never counted as passed. Shared contract: docs/management-api-contract.md. No production deployment or real-account/model execution in this round.",
         "title": "Aitoapi external management API",
-        "version": "1.0.0-draft.1"
+        "version": "1.0.0-local-acceptance-draft.2"
     },
     "openapi": "3.0.3",
     "paths": {
@@ -2953,9 +3003,13 @@
                 "x-response-mode": "sync"
             },
             "post": {
-                "description": "Console-password session only. Expand UI readonly/operator/admin templates to explicit scopes. Return plaintext token exactly once.",
+                "description": "Console-password session only. Expand UI readonly/operator/admin templates to explicit scopes. Return plaintext token exactly once. Requires X-Requested-With: XMLHttpRequest. Origin, when supplied, must match scheme and host; Sec-Fetch-Site cross-site/same-site is rejected.",
                 "operationId": "createManagementKey",
-                "parameters": [],
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/RequestedWith"
+                    }
+                ],
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3020,11 +3074,14 @@
         },
         "/api/management-keys/{id}": {
             "delete": {
-                "description": "Revoke key immediately; cancel queued writes. Running work remains attributed to the creating key.",
+                "description": "Revoke key immediately; cancel queued writes. Running work remains attributed to the creating key. Requires X-Requested-With: XMLHttpRequest. Origin, when supplied, must match scheme and host; Sec-Fetch-Site cross-site/same-site is rejected.",
                 "operationId": "revokeManagementKey",
                 "parameters": [
                     {
                         "$ref": "#/components/parameters/KeyId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/RequestedWith"
                     }
                 ],
                 "responses": {
@@ -3095,6 +3152,14 @@
             "description": "Account did not drain within 60 seconds; no forced interruption without force:true.",
             "httpStatus": 409
         },
+        "ACCOUNT_NOT_FOUND": {
+            "description": "Account is missing or no longer active.",
+            "httpStatus": 404
+        },
+        "AUDIT_PERSISTENCE_FAILED": {
+            "description": "Operation committed but audit persistence failed. Read the resource/task state before retrying.",
+            "httpStatus": 500
+        },
         "CANCELLED": {
             "description": "Cooperative cancellation stopped uncommitted task work.",
             "httpStatus": null
@@ -3131,8 +3196,16 @@
             "description": "Invalid Playwright storage state or forbidden management control fields.",
             "httpStatus": 400
         },
+        "INVALID_INDEX": {
+            "description": "Account filesystem index is invalid.",
+            "httpStatus": 400
+        },
         "INVALID_REQUEST": {
             "description": "Malformed JSON, invalid field, ID, pagination or unknown setting.",
+            "httpStatus": 400
+        },
+        "INVALID_SETTINGS": {
+            "description": "Settings patch contains an unsupported field or invalid value.",
             "httpStatus": 400
         },
         "INVALID_STATE": {
@@ -3159,6 +3232,18 @@
             "description": "Management admission limit reached; retry later.",
             "httpStatus": 429
         },
+        "SETTINGS_APPLICATION_FAILED": {
+            "description": "Settings were committed but applying runtime side effects failed; applicationError contains this code and a redacted message.",
+            "httpStatus": null
+        },
+        "SETTINGS_PERSISTENCE_FAILED": {
+            "description": "Settings persistence failed; live configuration was not changed.",
+            "httpStatus": 500
+        },
+        "SETTINGS_PERSISTENCE_RECOVERY_FAILED": {
+            "description": "Settings write and restoration both failed; live configuration was not changed and disk state needs inspection.",
+            "httpStatus": 500
+        },
         "UNAUTHORIZED": {
             "description": "Missing, invalid, expired or revoked management bearer token.",
             "httpStatus": 401
@@ -3174,9 +3259,13 @@
         "VERSION_CONFLICT": {
             "description": "Credential/state changed after verification began; stale commit rejected.",
             "httpStatus": 409
+        },
+        "VERSION_REQUIRED": {
+            "description": "An internal guarded storage refresh omitted expectedCredentialVersion.",
+            "httpStatus": 400
         }
     },
-    "x-implementation-status": "contract-only; legacy baseline tested separately; wave-2 and live gates pending",
+    "x-implementation-status": "local acceptance preparation; wave-2 and live gates pending",
     "x-limits": {
         "batchItems": 100,
         "bodyBytes": 10485760,

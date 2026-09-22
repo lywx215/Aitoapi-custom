@@ -2,7 +2,7 @@
 
 本文件与 [OpenAPI 3.0.3](management-api-openapi.json) 描述 `/api/manage/v1` 和 `/api/management-keys`。共享约束以 [management-api-contract.md](management-api-contract.md) 为准。资源统一命名为 **task / taskId / tasks**；旧的 operations 命名不作为公开 API。
 
-**交付阶段：波次 1 契约和旧行为基线，尚未完成新管理 API 整体验收。** 基线提交为 `55e72484741a0e3cfec074d0526c3a4f6e4aa157`。本轮未启动生产实例、读取真实凭证或调用真实模型。OpenAPI 的完整字段、每路由权限映射和错误码是给 T4/T5 对齐的实施细化，不能当作服务已提供这些能力的证据。总控已确认大写下划线错误码、单账户/设置 PATCH 可同步 200、批量和浏览器耗时操作走 202/task；其余细化需在集成提交上核对。
+**交付阶段：准备最终本地模拟验收，等待真实任务/账户/验证器与运行时挂载全部集成。** 本轮准备基线为 `38d28c7`（已集成管理密钥）。用户已明确真实账户验证另行安排，LIVE-01 为 deferred，不能计为通过。本轮不部署、不读取真实凭证、不调用生产模型。文档/schema 已按真实 store 和密钥 API 修订，其余新管理路由仍需在最终集成提交上核对。部署、持久卷、离线 CLI 和恢复边界见总控的 `docs/management-api-deployment.md`。
 
 ## 认证与密钥
 
@@ -17,6 +17,8 @@
 | admin    | 全部 12 个 scope，额外含 `accounts:export`, `accounts:archive`, `settings:write`, `audit:read`                                |
 
 模板由 UI 展开成显式 `scopes` 数组提交；创建请求是 `{name,scopes,expiresAt?}`，没有 `template` 字段。权限按具体路由检查；能提交任务不自动获得读取任务权限，轮询调用方还需要 `tasks:read`。
+
+密钥 POST/DELETE 还必须带 `X-Requested-With: XMLHttpRequest`。如果发送 `Origin`，它必须与当前请求的协议和 host 严格匹配；`Sec-Fetch-Site: cross-site` 或 `same-site` 均被拒绝。响应设为 `Cache-Control: no-store`。管理 Bearer 不能替代此 session/同源校验。
 
 ## 通用格式与限制
 
@@ -75,43 +77,55 @@ Task 包含 `taskId`、`kind`、`createdByKeyId`、时间戳、`counts`、`items
 
 导入默认使用 `gemini-3.8-flash` 测试候选凭证后自动启用；重复邮箱报错，不替换已有账户。替换凭证先隔离验证候选，再按读取时的 credentialVersion/stateVersion 校验提交。手动状态更改优先，旧验证快照不得覆盖较新的禁用/过期状态。账户列表、任务、审计和错误不返回 cookie/localStorage/credentialState，只有有 export 权限的导出接口可以返回凭证。
 
+只有新 import 获得 `model_verified` 结果并通过 credential/state 双版本检查后才自动启用。`test`（connection/model）只读，不改变启用状态；replace 成功保留当前管理标记，不自动启用。显式 PATCH/batch `enabled:true` 是人工管理操作，可以启用 pending 账户，但不能作为模型验证成功的证据。失败导入可先 replace 修复凭证、验证成功后再明确 enable。
+
 验证器默认并发 1、总超时 10 分钟、固定且有界的 OK 提示。`connection` 仅说明连接可用；`model` 必须有目标账户真实模型响应，不能用页面控制台成功信号代替，不能失败后切到别的账户。验证不得使用生产 ConnectionRegistry、改变生产 currentAuthIndex 或占用生产上下文；候选 storage state 只能由调用方在版本校验通过后提交。
 
 禁用/归档等操作先等待当前账户请求排空，最多 60 秒；超时显式报告待处理/失败，此细化选用 `ACCOUNT_BUSY`。只有调用方显式 `force:true` 才可中断。store 锁内不执行浏览器操作，生产池在提交后再平衡。
 
 ## 设置持久化
 
-PATCH 使用显式值，例如 `{ "maxRetries": 4 }`，不使用 toggle。只有 `maxContexts/maxRetries/retryDelay/autoDisableStatusCodes/accountCooldownMs/accountCooldownMaxMs/autoHealProbeIntervalMs/autoHealProbeTimeoutMs` 持久化；其余 allowlist 运行时开关沿用旧重启语义，不改变环境变量优先级。数值范围见 OpenAPI，`accountCooldownMaxMs >= accountCooldownMs`。
+PATCH 使用显式值，例如 `{ "maxRetries": 4 }`，不使用 toggle。只有 `maxContexts/maxRetries/retryDelay/autoDisableStatusCodes/accountCooldownMs/accountCooldownMaxMs/autoHealProbeIntervalMs/autoHealProbeTimeoutMs` 持久化；其余 allowlist 运行时开关沿用旧重启语义，不改变环境变量优先级。`debugMode` 和正整数 `logMaxCount` 是可写但不持久化的设置；`enableUsageStats` 不支持热切换，不在 patch/snapshot allowlist 中。数值范围见 OpenAPI，`accountCooldownMaxMs >= accountCooldownMs`。
 
-所有字段先验证，候选配置成功落盘后才应用到内存。`persisted:true,applied:false` 表示磁盘已更新但应用回调失败，读取当前值并诊断 `applicationError`，不要把它理解为完全未发生。文件写失败返回 `PERSISTENCE_ERROR`；单文件 bind mount 回退路径需尽力恢复失败前内容。控制台和外部管理共享同一 writer，以避免并发覆盖。
+所有字段先验证，候选配置成功落盘后才应用到内存。`persisted:true,applied:false` 表示磁盘已更新但应用回调失败，读取当前值并诊断 `applicationError:{code,message}`，不要把它理解为完全未发生。其 code 为 `SETTINGS_APPLICATION_FAILED`，消息经脱敏。设置写入错误为 `SETTINGS_PERSISTENCE_FAILED`，恢复也失败则为 `SETTINGS_PERSISTENCE_RECOVERY_FAILED`，两者均不修改内存配置。控制台和外部管理共享同一 writer，以避免并发覆盖。
+
+同步业务已提交后若审计持久化失败，返回 HTTP 500 `AUDIT_PERSISTENCE_FAILED`，固定消息明确说明业务已提交。调用方必须先读取资源/任务状态再决定是否重试，不能把该错误当作业务未执行。
 
 ## 错误码
 
 HTTP 错误用 envelope；验证/取消/重启等异步结果位于 task/item.error，获取失败任务本身仍可返回 HTTP 200。上游状态放在验证结果 `upstreamStatus`，不要与管理路由 HTTP 状态混淆。
 
-| code                      | HTTP      | 调用方处理                                  |
-| ------------------------- | --------- | ------------------------------------------- |
-| INVALID_REQUEST           | 400       | 修正 JSON、字段、ID、分页或设置             |
-| INVALID_CREDENTIALS       | 400       | 修正 Playwright storage state，去除控制字段 |
-| IDEMPOTENCY_KEY_REQUIRED  | 400       | 为 task 提交补充幂等键                      |
-| UNAUTHORIZED              | 401       | 检查 Bearer；失效、过期、撤销均拒绝         |
-| FORBIDDEN                 | 403       | 补足该操作所需 scope                        |
-| CONSOLE_PASSWORD_REQUIRED | 403       | 用控制台密码重新登录后管理密钥              |
-| NOT_FOUND                 | 404       | 检查资源、路径、保留期                      |
-| METHOD_NOT_ALLOWED        | 405       | 使用文档指定方法；不转发模型                |
-| IDEMPOTENCY_CONFLICT      | 409       | 同一逻辑提交保留原内容，新操作使用新键      |
-| DUPLICATE_ACCOUNT         | 409       | 显式选择替换流程，导入不覆盖                |
-| VERSION_CONFLICT          | 409       | 重新读取状态，重新验证；不覆盖手动操作      |
-| ACCOUNT_BUSY              | 409       | 等待排空；强制中断必须显式选择              |
-| INVALID_STATE             | 409       | 检查当前账户/任务状态                       |
-| PAYLOAD_TOO_LARGE         | 413       | 分批；缩减 JSON/凭证体积                    |
-| RATE_LIMITED              | 429       | 延迟重试，同一 task 提交保持幂等键          |
-| PERSISTENCE_ERROR         | 500       | 检查磁盘/挂载；读取任务状态后决定重试       |
-| INTERNAL_ERROR            | 500       | 保留 requestId 定位；错误消息不含秘密       |
-| VERIFICATION_FAILED       | task/item | 目标验证失败；不以别的账户结果替代          |
-| VERIFICATION_TIMEOUT      | task/item | 达到 10 分钟上限                            |
-| CANCELLED                 | task/item | 停止未提交部分，保留已提交状态              |
-| INTERRUPTED               | task/item | 重启中断，需要调用方判断后续操作            |
+| code                                 | HTTP             | 调用方处理                                     |
+| ------------------------------------ | ---------------- | ---------------------------------------------- |
+| INVALID_REQUEST                      | 400              | 修正 JSON、字段、ID、分页或设置                |
+| INVALID_CREDENTIALS                  | 400              | 修正 Playwright storage state，去除控制字段    |
+| IDEMPOTENCY_KEY_REQUIRED             | 400              | 为 task 提交补充幂等键                         |
+| UNAUTHORIZED                         | 401              | 检查 Bearer；失效、过期、撤销均拒绝            |
+| FORBIDDEN                            | 403              | 补足该操作所需 scope                           |
+| CONSOLE_PASSWORD_REQUIRED            | 403              | 用控制台密码重新登录后管理密钥                 |
+| NOT_FOUND                            | 404              | 检查资源、路径、保留期                         |
+| METHOD_NOT_ALLOWED                   | 405              | 使用文档指定方法；不转发模型                   |
+| IDEMPOTENCY_CONFLICT                 | 409              | 同一逻辑提交保留原内容，新操作使用新键         |
+| DUPLICATE_ACCOUNT                    | 409              | 显式选择替换流程，导入不覆盖                   |
+| VERSION_CONFLICT                     | 409              | 重新读取状态，重新验证；不覆盖手动操作         |
+| ACCOUNT_BUSY                         | 409              | 等待排空；强制中断必须显式选择                 |
+| INVALID_STATE                        | 409              | 检查当前账户/任务状态                          |
+| PAYLOAD_TOO_LARGE                    | 413              | 分批；缩减 JSON/凭证体积                       |
+| RATE_LIMITED                         | 429              | 延迟重试，同一 task 提交保持幂等键             |
+| PERSISTENCE_ERROR                    | 500              | 检查磁盘/挂载；读取任务状态后决定重试          |
+| INVALID_SETTINGS                     | 400              | 修正设置 patch；不支持 enableUsageStats 热切换 |
+| SETTINGS_PERSISTENCE_FAILED          | 500              | 落盘失败，内存配置未变                         |
+| SETTINGS_PERSISTENCE_RECOVERY_FAILED | 500              | 落盘和恢复均失败，检查磁盘状态                 |
+| SETTINGS_APPLICATION_FAILED          | applicationError | 已提交但运行时应用失败；message 为脱敏文本     |
+| AUDIT_PERSISTENCE_FAILED             | 500              | 业务已提交但审计失败，先读取状态再重试         |
+| ACCOUNT_NOT_FOUND                    | 404              | 账户不存在或已不活跃                           |
+| INVALID_INDEX                        | 400              | 内部账户编号非法                               |
+| VERSION_REQUIRED                     | 400              | 存储刷新缺少 expectedCredentialVersion         |
+| INTERNAL_ERROR                       | 500              | 保留 requestId 定位；错误消息不含秘密          |
+| VERIFICATION_FAILED                  | task/item        | 目标验证失败；不以别的账户结果替代             |
+| VERIFICATION_TIMEOUT                 | task/item        | 达到 10 分钟上限                               |
+| CANCELLED                            | task/item        | 停止未提交部分，保留已提交状态                 |
+| INTERRUPTED                          | task/item        | 重启中断，需要调用方判断后续操作               |
 
 重复邮箱、版本冲突、落盘失败等若在任务接收后才发现，会记录到 task/item.error，而不是修改原有 202 响应。OpenAPI 的 `x-error-catalog` 给出同一映射。此阶段尚未用真实新路由验证错误拼写和响应字段。
 
@@ -162,7 +176,7 @@ const updated = await call("/settings", {
   method: "PATCH",
   body: JSON.stringify({ maxRetries: 4 }),
 });
-if (!updated.applied) throw new Error(updated.applicationError || "Settings application failed");
+if (!updated.applied) throw new Error(updated.applicationError?.message || "Settings application failed");
 ```
 
 批量导入 body 结构示例：
@@ -189,12 +203,13 @@ if (!updated.applied) throw new Error(updated.applicationError || "Settings appl
 
 ```sh
 node scripts/tests/managementAcceptance.test.js
+node scripts/tests/managementAcceptance.test.js --require-local
 node scripts/tests/managementAcceptance.test.js --require-full
 ```
 
 第一条验证 OpenAPI 路由清单、引用、权限声明、错误码、limits、schema 安全字段，并运行真实 `new StatusRoutes`、`new AuthSource`、`new RequestHandler`、`new UsageStatsService`。路由通过真实 Express 在 `127.0.0.1` 随机端口访问，浏览器/连接/认证边界用 mocks，绝不构造或启动生产 `ProxyServerSystem`。全部账户和状态文件位于 `os.tmpdir()` 下新建的目录，退出时恢复 cwd 并清理；socket guard 仅允许 fixture 本地端口，TLS 出站被拒绝。
 
-第一条的 10 项 TODO **不计作通过**。Node test runner 可能在 TODO 行显示对勾，但结果汇总单列 `todo`。第二条是严格门禁：当前必须非零退出，说明没有完成整体验收，不能凭基线绿灯宣称 API 或真实模型已通过。整合新服务后需要替换 TODO 为真实集成检查，并保留独立 live 证据门禁。结构检查不是第三方完整 OpenAPI 元规范验证器，也没有声称运行时已符合 schema。
+当前 9 项 W2 TODO **不计作通过**；LIVE-01 单独标为 SKIP/deferred。Node test runner 可能在 TODO 行显示对勾，以汇总的 todo/skipped 区分。`--require-local` 要求全部 W2 本地集成项完成，当前仍必须非零退出；`--require-full` 还要求真实 LIVE 证据，因此本轮即使本地全部通过也必须失败。不得用本地门禁代替真实账号验证。结构检查不是第三方完整 OpenAPI 元规范验证器。真实 ManagementKeys.vue 另经 Vue compiler-sfc 编译并用非 DOM renderer 执行脚本行为，包括模板权限、同源头、一次性token、撤销、session降级和卸载清理，不涉及GUI自动化。
 
 ## 验收矩阵
 
@@ -219,6 +234,6 @@ node scripts/tests/managementAcceptance.test.js --require-full
 | W2-07   | 取消/撤销 queued、运行归属、已提交不回滚、60 秒 drain 和 force                                | pending                              |
 | W2-08   | 共享 writer、设置并发/失败不改内存、applied:false、重启与 bind mount                          | pending；T2 单测需集成复验           |
 | W2-09   | 10MiB/1MiB/100 项边界、limit 默认/上限、export scope、所有响应/日志/audit 无秘密              | pending                              |
-| LIVE-01 | 单独授权的两真实账户 model 模式验证；保存去敏 taskId/requestId/账户归属/上游状态/时间证据     | pending；本轮禁止执行                |
+| LIVE-01 | 单独授权的两真实账户 model 模式验证；保存去敏 taskId/requestId/账户归属/上游状态/时间证据     | deferred；用户安排另行测试           |
 
 下一轮必须在总控提供的集成提交上加载真实波次 2 服务，并用 mock 浏览器边界完成模拟 E2E。真实两账户 gate 是独立证据，不得用模拟 E2E 或旧连接测试替代。

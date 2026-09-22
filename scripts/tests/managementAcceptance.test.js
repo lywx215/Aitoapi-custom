@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const { createHarness } = require("./fixtures/management/harness");
+const { registerKeyPanelTests } = require("./fixtures/management/keyPanel");
 const spec = require("../../docs/management-api-openapi.json");
 
 const expectedRoutes = {
@@ -38,8 +39,8 @@ const pendingGates = [
     "W2-07 cooperative cancel/revoke queued writes, committed work preserved, active account drain and explicit force",
     "W2-08 real settings store concurrent writers, disk failure, apply failure, restart semantics and bind-mount fallback",
     "W2-09 size limits, pagination, export permission and credential/token redaction in status/tasks/audit/errors",
-    "LIVE-01 separately authorized two-account real model acceptance with genuine upstream evidence",
 ];
+const deferredLive = "LIVE-01 deferred by user: real two-account model evidence is outside this local-only round";
 
 function resolveRef(value) {
     assert.ok(value.startsWith("#/"), `Only local references are allowed: ${value}`);
@@ -282,13 +283,17 @@ test("legacy real-service baseline with isolated fixtures (not wave-2 acceptance
     assert.equal(fs.existsSync(h.rootDir), false);
 });
 
+registerKeyPanelTests(test);
 for (const gate of pendingGates) test.todo(gate);
+test.skip(deferredLive);
+if (process.argv.includes("--require-local")) {
+    test("local management acceptance gate", () => {
+        assert.equal(pendingGates.length, 0, "LOCAL NOT ACCEPTED: real wave-2 integration gates remain pending.");
+    });
+}
 if (process.argv.includes("--require-full")) {
     test("full management acceptance gate", () => {
-        assert.equal(
-            pendingGates.length,
-            0,
-            "NOT ACCEPTED: wave-2 integration and live evidence are pending; a baseline pass is insufficient."
-        );
+        assert.equal(pendingGates.length, 0, "NOT ACCEPTED: real wave-2 integration gates remain pending.");
+        assert.fail(deferredLive);
     });
 }
