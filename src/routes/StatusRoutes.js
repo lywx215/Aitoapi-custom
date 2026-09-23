@@ -233,6 +233,45 @@ class StatusRoutes {
             res.json(UsageStatsService.applyRecordsLimit(snapshot, req.query.limit));
         });
 
+        app.get("/api/model-probes", isAuthenticated, (req, res) => {
+            try {
+                res.setHeader("Cache-Control", "no-store");
+                res.json(this.serverSystem.modelProbeService.snapshot());
+            } catch (error) {
+                this.logger.error(`[ModelProbe] Failed to read probe state: ${error.code || "error"}`);
+                res.status(500).json({ error: "PROBE_STATE_UNAVAILABLE", message: "modelProbeStateUnavailable" });
+            }
+        });
+
+        app.post("/api/model-probes/runs", isAuthenticated, (req, res) => {
+            try {
+                const run = this.serverSystem.modelProbeService.start();
+                res.status(202).json({ runId: run.runId, status: run.status });
+            } catch (error) {
+                res.status(error.status || 500).json({
+                    error: error.code || "PROBE_START_FAILED",
+                    message:
+                        error.code === "PROBE_RUNNING"
+                            ? "modelProbeAlreadyRunning"
+                            : error.code === "NO_PROBE_ACCOUNT"
+                              ? "modelProbeNoAccount"
+                              : "modelProbeStartFailed",
+                });
+            }
+        });
+
+        app.post("/api/model-probes/runs/:runId/cancel", isAuthenticated, (req, res) => {
+            try {
+                const run = this.serverSystem.modelProbeService.cancel(req.params.runId);
+                res.json({ runId: run.runId, status: run.status });
+            } catch (error) {
+                res.status(error.status || 500).json({
+                    error: error.code || "PROBE_CANCEL_FAILED",
+                    message: error.code === "PROBE_NOT_FOUND" ? "modelProbeNotFound" : "modelProbeCancelFailed",
+                });
+            }
+        });
+
         app.get("/api/usage-stats/download", isAuthenticated, async (req, res) => {
             try {
                 const usageStatsService = this.serverSystem.usageStatsService;

@@ -271,6 +271,7 @@ API Key 支持 `x-goog-api-key`、`Authorization: Bearer`、`x-api-key` 和查�
 
 - 登录与 VNC：`/login`、`/logout`、`/api/vnc/*`；
 - 状态与版本：`/health`、`/api/status`、`/api/version/check`；
+- 模型探测：`GET /api/model-probes`、`POST /api/model-probes/runs`、`POST /api/model-probes/runs/:runId/cancel`；
 - 用量统计：`/api/usage-stats*`；
 - 账号操作：切换、测试、去重、启禁用、单个/批量删除与下载；
 - 运行参数：流式模式、强制工具、日志、重试、上下文、冷却、AutoHeal；
@@ -295,7 +296,15 @@ API Key 支持 `x-goog-api-key`、`Authorization: Bearer`、`x-api-key` 和查�
 
 只有名称以 `models/gemini-` 开头、支持 `generateContent`，且名称不包含 image、tts、embedding、computer-use、robotics 的模型会扩展对话后缀。
 
-### 8.2 后缀语法
+### 8.2 可用模型探测
+
+`ModelProbeService` 从 `config.modelList` 动态选择基础模型，不读取模型发现接口生成的后缀别名。当前目录对应 17 个文本模型和 7 个图像模型；TTS、Embedding、Robotics 与 Computer Use 不进入探测。
+
+探测是控制台手动任务，并且会产生真实上游调用。它按启用账号顺序工作，每个账号只建立一个池外隔离浏览器，在其中串行测试仍未成功的模型；模型一旦成功便不再使用后续账号测试。文本响应要求有效文本，Gemini 图片响应要求 `inlineData`，Imagen 响应要求 `predictions[].bytesBase64Encoded`。图片数据只在内存中验证，不落盘。
+
+结果分为 `available`、`unavailable`、`indeterminate`、`not_tested`。只有所有已启用账号都明确返回 403/404 时才标记不可用；401、429、超时、5xx 和无效响应均属于不确定。探测不切换生产当前账号、不占生产上下文、不修改账号启用状态或普通请求统计，且 `/v1/models` 始终返回静态完整目录。
+
+### 8.3 后缀语法
 
 规范顺序为：
 
@@ -343,6 +352,7 @@ Web UI 当前持久化：`maxContexts`、`maxRetries`、`retryDelay`、`autoDisa
 | `configs/runtime-settings.json` | UI 持久化参数                           | 已忽略              |
 | `data/usage-stats.jsonl`        | 请求统计                                | 已忽略；持续增长    |
 | `data/account-route-state.json` | 冷却、quota 与错误状态                  | 已忽略              |
+| `data/model-probes.json`        | 最近完整模型探测结果与当前任务状态      | 已忽略；原子写入    |
 | `data/removed-auth-backup/`     | 自动移除账号备份                        | 已忽略；敏感凭证    |
 | `proxylist.txt`                 | 每账号固定代理候选                      | 已忽略；可能含密码  |
 | `proxy_mapping.json`            | 账号到代理的稳定映射                    | 已忽略；原子写入    |
@@ -359,13 +369,15 @@ Web UI 当前持久化：`maxContexts`、`maxRetries`、`retryDelay`、`autoDisa
 
 Vue 路由只有 `/`、`/login`、`/auth` 和 404 页面。生产构建输出到 `ui/dist`，由 Express 静态托管。
 
-状态页承担了账号列表、统计、日志、运行参数和更新检查等多数功能。新增后端字段时通常需要同步：
+状态页承担账号列表、统计、日志、运行参数和更新检查等多数功能；模型探测独立放在 `ui/app/components/ModelProbePanel.vue`，避免继续扩大主页面。新增后端字段时通常需要同步：
 
 1. `StatusRoutes._getStatusData()`；
 2. `ui/app/pages/StatusPage.vue` 的状态模型、界面和请求；
 3. `ui/locales/zh.json` 与 `ui/locales/en.json`；
 4. 必要时更新 `EnvVarTooltip.vue`；
 5. 重新运行 `npm run build:ui` 并确认 `ui/dist` 变化合理。
+
+模型探测仅在任务运行时轮询。刷新页面后由 `GET /api/model-probes` 恢复当前进度；进程重启会把遗留运行任务标记为 `interrupted`，不会覆盖最近一次完整结果。模型目录或账号 credential/state 版本变化时，旧结果继续显示并标记为需要重新探测。
 
 前端使用 `v-html` 展示部分内容，改动对应数据源时要进行 HTML 转义或继续使用现有 `escapeHtml` 工具，避免扩大 XSS 面。
 

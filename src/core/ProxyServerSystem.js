@@ -31,6 +31,7 @@ const ManagementVerifier = require("../management/ManagementVerifier");
 const ManagementRoutes = require("../routes/ManagementRoutes");
 const ManagementKeyRoutes = require("../routes/ManagementKeyRoutes");
 const ManagementRuntime = require("../management/ManagementRuntime");
+const ModelProbeService = require("../model-probe/ModelProbeService");
 
 /**
  * Proxy Server System
@@ -121,6 +122,8 @@ class ProxyServerSystem extends EventEmitter {
             this.authSource
         );
         this.browserManager.setSystemBusyProvider(() => this.requestHandler?.isSystemBusy === true);
+
+        this.modelProbeService = new ModelProbeService(this);
 
         this.httpServer = null;
         this.wsServer = null;
@@ -532,8 +535,9 @@ class ProxyServerSystem extends EventEmitter {
 
         // Legacy console namespaces are local too; a typo or wrong HTTP verb
         // must not accidentally become a Google request after model-key auth.
-        app.use(/^\/(?:api\/(?:accounts|settings|auth|files|status|usage-stats)|login|logout)(?=\/|$)/i, (req, res) =>
-            res.status(404).json({ error: "NOT_FOUND", message: "Management route or method not found." })
+        app.use(
+            /^\/(?:api\/(?:accounts|settings|auth|files|status|usage-stats|model-probes)|login|logout)(?=\/|$)/i,
+            (req, res) => res.status(404).json({ error: "NOT_FOUND", message: "Management route or method not found." })
         );
 
         // API authentication middleware
@@ -699,6 +703,7 @@ class ProxyServerSystem extends EventEmitter {
     async shutdown() {
         this.logger.info("[System] Shutting down server system...");
         const managementCleanup = await Promise.allSettled([
+            Promise.resolve().then(() => this.modelProbeService?.close()),
             Promise.resolve().then(() => this.managementTaskService?.close()),
             Promise.resolve().then(() => this.managementVerifier?.close()),
         ]);

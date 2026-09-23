@@ -99,6 +99,31 @@
                         <path d="M7 16l4-4 3 3 5-7"></path>
                     </svg>
                 </button>
+                <button
+                    class="menu-item"
+                    :class="{ active: activeTab === 'models' }"
+                    :title="t('modelProbeTitle')"
+                    @click="switchTab('models')"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path
+                            d="M12 2a4 4 0 0 0-4 4v1a4 4 0 0 0-4 4v2a4 4 0 0 0 4 4v1a4 4 0 0 0 8 0v-1a4 4 0 0 0 4-4v-2a4 4 0 0 0-4-4V6a4 4 0 0 0-4-4Z"
+                        />
+                        <path d="M8 7h8" />
+                        <path d="M8 17h8" />
+                        <path d="M12 2v20" />
+                    </svg>
+                </button>
             </div>
 
             <div class="sidebar-footer">
@@ -2782,6 +2807,10 @@
                 </div>
             </div>
 
+            <div v-if="activeTab === 'models'" class="view-container">
+                <ModelProbePanel />
+            </div>
+
             <!-- LOGS VIEW -->
             <div v-if="activeTab === 'logs'" class="view-container logs-view-container">
                 <header class="page-header" style="display: flex; justify-content: space-between; align-items: center">
@@ -2912,6 +2941,7 @@ import I18n from "../utils/i18n";
 import { useTheme } from "../utils/useTheme";
 import EnvVarTooltip from "../components/EnvVarTooltip.vue";
 import ManagementKeys from "../components/ManagementKeys.vue";
+import ModelProbePanel from "../components/ModelProbePanel.vue";
 
 const router = useRouter();
 const fileInput = ref(null);

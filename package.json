@@ -21,6 +21,7 @@
     "test:crashloop-autoheal": "node scripts/tests/crashLoopAutoHeal.test.js",
     "test:quota": "node scripts/tests/quotaCircuitBreaker.test.js",
     "test:autoheal-probe": "node scripts/tests/autoHealIsolatedProbe.test.js",
+    "test:model-probe": "node scripts/tests/modelProbe.test.js",
     "test:upstream-improvements": "node scripts/tests/upstreamImprovements.test.js",
     "test:credential-store": "node scripts/tests/credentialStore.test.js",
     "test:runtime-settings": "node scripts/tests/runtimeSettingsStore.test.js",

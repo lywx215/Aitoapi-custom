@@ -22,6 +22,7 @@ const tests = [
     "crashLoopQuarantine",
     "crashLoopAutoHeal",
     "autoHealIsolatedProbe",
+    "modelProbe",
     "upstreamImprovements",
     "usageStatsLimit",
 ];
