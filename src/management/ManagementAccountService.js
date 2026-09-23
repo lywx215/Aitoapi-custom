@@ -142,7 +142,23 @@ class ManagementAccountService {
             // Validate the entire batch before admission or any credential write.
             return { items, model: this._model(body) };
         }
-        if (kind === "replace") return { credentials: ManagementAccountService.credentials(body), id, model: MODEL };
+        if (kind === "replace") {
+            if (body && Object.hasOwn(body, "credentials")) {
+                object(body, ["credentials", "expectedCredentialVersion", "expectedStateVersion"], ["credentials"]);
+                const hasCredential = body.expectedCredentialVersion !== undefined;
+                const hasState = body.expectedStateVersion !== undefined;
+                if (hasCredential !== hasState || (hasCredential && (
+                    !Number.isSafeInteger(body.expectedCredentialVersion) || body.expectedCredentialVersion < 1 ||
+                    !Number.isSafeInteger(body.expectedStateVersion) || body.expectedStateVersion < 1
+                ))) throw failure("INVALID_REQUEST");
+                return {
+                    credentials: ManagementAccountService.credentials(body.credentials), id, model: MODEL,
+                    ...(hasCredential ? { expectedCredentialVersion: body.expectedCredentialVersion,
+                        expectedStateVersion: body.expectedStateVersion } : {}),
+                };
+            }
+            return { credentials: ManagementAccountService.credentials(body), id, model: MODEL };
+        }
         if (kind === "batch") {
             object(body, ["action", "accountIds", "force"], ["action", "accountIds"]);
             if (!["enable", "disable", "archive"].includes(body.action)) throw failure("INVALID_REQUEST");
@@ -218,8 +234,25 @@ class ManagementAccountService {
         }
     }
     async patch(id, body, actor) {
-        object(body, ["enabled", "force"], ["enabled"]);
+        object(body, ["enabled", "force", "expectedCredentialVersion", "expectedStateVersion"], ["enabled"]);
         if (typeof body.enabled !== "boolean") throw failure("INVALID_REQUEST");
+        const hasCredentialVersion = body.expectedCredentialVersion !== undefined;
+        const hasStateVersion = body.expectedStateVersion !== undefined;
+        if (
+            hasCredentialVersion !== hasStateVersion ||
+            (hasCredentialVersion &&
+                (!Number.isSafeInteger(body.expectedCredentialVersion) ||
+                    body.expectedCredentialVersion < 1 ||
+                    !Number.isSafeInteger(body.expectedStateVersion) ||
+                    body.expectedStateVersion < 1))
+        )
+            throw failure("INVALID_REQUEST");
+        const expectedVersions = hasCredentialVersion
+            ? {
+                  expectedCredentialVersion: body.expectedCredentialVersion,
+                  expectedStateVersion: body.expectedStateVersion,
+              }
+            : {};
         const force = this._force(body);
         const row = this._find(id);
         return this._serialized(row.index, async () => {
@@ -233,14 +266,14 @@ class ManagementAccountService {
                     disabledReason: null,
                     disabledStatus: null,
                     expired: null,
-                });
+                }, expectedVersions);
             } else {
                 this._runtime();
                 await this.store.updateState(row.index, {
                     disabled: true,
                     disabledAt: new Date().toISOString(),
                     disabledReason: "manual",
-                });
+                }, expectedVersions);
                 this.system.authSource.reloadAuthSources();
                 await this._drain(row.index, force, { check: () => this._checkActor(actor) }, async runtime =>
                     runtime.closeAccount(row.index, { force })
@@ -313,6 +346,24 @@ class ManagementAccountService {
             current.stateVersion !== row.stateVersion
         )
             throw failure("VERSION_CONFLICT");
+        return current;
+    }
+    _verifiedResult(row, result, metadata) {
+        if (
+            !metadata ||
+            metadata.accountId !== row.accountId ||
+            metadata.index !== row.index ||
+            !Number.isSafeInteger(metadata.credentialVersion) ||
+            metadata.credentialVersion < 1 ||
+            !Number.isSafeInteger(metadata.stateVersion) ||
+            metadata.stateVersion < 1
+        )
+            throw failure("VERSION_CONFLICT");
+        return {
+            ...result,
+            credentialVersion: metadata.credentialVersion,
+            stateVersion: metadata.stateVersion,
+        };
     }
     async _execute(kind, payload, context) {
         if (kind === "import") {
@@ -333,7 +384,7 @@ class ManagementAccountService {
                     await this._serialized(row.index, async () => {
                         item.check();
                         this._assertVersion(row);
-                        await this.store.updateState(
+                        const committed = await this.store.updateState(
                             row.index,
                             {
                                 disabled: null,
@@ -344,7 +395,7 @@ class ManagementAccountService {
                             },
                             versions(row)
                         );
-                        item.committed(result);
+                        item.committed(this._verifiedResult(row, result, committed));
                     });
                     await this._refreshPool();
                 });
@@ -374,9 +425,13 @@ class ManagementAccountService {
                     payload.model,
                     item
                 );
-                this._assertVersion(row);
-                item.committed(result);
+                const current = this._assertVersion(row);
+                item.committed(this._verifiedResult(row, result, current));
             } else if (kind === "replace") {
+                if (payload.expectedCredentialVersion !== undefined && (
+                    row.credentialVersion !== payload.expectedCredentialVersion ||
+                    row.stateVersion !== payload.expectedStateVersion
+                )) throw failure("VERSION_CONFLICT");
                 this._duplicates([{ credentials: payload.credentials }], row.accountId);
                 const result = await this._verify(row, payload.credentials, "model", payload.model, item);
                 await this._serialized(row.index, async () => {
@@ -388,9 +443,9 @@ class ManagementAccountService {
                         // Close only after drain. Failed candidate verification never touches production.
                         await runtime.closeAccount(row.index, { force: false });
                         item.check();
-                        await this.store.replace(row.index, payload.credentials, versions(row));
+                        const committed = await this.store.replace(row.index, payload.credentials, versions(row));
                         item.mutated();
-                        item.committed(result);
+                        item.committed(this._verifiedResult(row, result, committed));
                         this.system.authSource.reloadAuthSources();
                     });
                 });

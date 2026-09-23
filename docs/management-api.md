@@ -47,8 +47,8 @@
 | POST `/accounts/{id}/archive`    | accounts:archive                              | 202  | 可选 `{force}`                                                  |
 | POST `/accounts/{id}/restore`    | accounts:archive                              | 202  | 恢复同一 identity，保持手动禁用                                 |
 | POST `/accounts/{id}/reload`     | accounts:write                                | 202  | 可选 `{force}`                                                  |
-| PUT `/accounts/{id}/credentials` | accounts:write + accounts:test                | 202  | body 直接为凭证对象或 JSON 字符串                               |
-| PATCH `/accounts/{id}`           | accounts:write                                | 200  | `{enabled:boolean,force?:boolean}`                              |
+| PUT `/accounts/{id}/credentials` | accounts:write + accounts:test                | 202  | 旧 body 直接为凭证对象或 JSON 字符串；新客户端可用 `{credentials,expectedCredentialVersion,expectedStateVersion}`，版本须成对，过期返回 `VERSION_CONFLICT` |
+| PATCH `/accounts/{id}`           | accounts:write                                | 200  | `{enabled:boolean,force?:boolean,expectedCredentialVersion?:integer,expectedStateVersion?:integer}`；两个版本须同时传入，不匹配返回 409 `VERSION_CONFLICT` |
 | GET `/settings`                  | settings:read                                 | 200  | `{values,persistentKeys}`                                       |
 | PATCH `/settings`                | settings:write                                | 200  | 显式设置 patch → `{values,persisted,applied,applicationError?}` |
 | GET `/usage`                     | usage:read                                    | 200  | 安全用量记录分页                                                |
@@ -74,6 +74,8 @@
 每次逻辑提交生成一个 `Idempotency-Key`。同一管理 key ID、同一幂等键、相同规范化方法/路径/内容返回原 admission 和 taskId；不同内容返回 409 `IDEMPOTENCY_CONFLICT`。不要在网络超时后换幂等键盲目重试。原 admission 的 `status:queued` 不代表当前状态，请 GET task。幂等记录随任务保留 30 天，过期后不可依赖旧键去重。
 
 Task 包含 `taskId`、`kind`、`createdByKeyId`、时间戳、`counts`、`items`、`result` 和可选 `error`。item 保留 `clientRef`、目标 `accountId/index`、`status/progress/stage/error`。状态为 `queued/running/succeeded/partial/failed/cancelled/interrupted`；前两者非终态。批量应逐项检查，`partial` 不代表所有账户成功。
+
+成功 import/replace/test 的验证结果 `item.result` 还包含 `credentialVersion` 和 `stateVersion`：import/replace 是实际提交后的版本，test 是验证后复核通过时的版本。只有两个版本与当前账号完全一致，历史 `model_verified` 才能作为当前凭证的验证证据。失败项与旧任务可以没有这两个字段，不能用当前版本补填。
 
 重启后 queued 恢复排队，running 标为 interrupted，禁止自动重放。取消是合作式的：200 取消响应中的状态可能仍为 running，后续轮询直到终态；已经写入的状态不回滚。任务和审计保留 30 天，不能把它们作为无限期账本。
 

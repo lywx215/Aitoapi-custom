@@ -363,3 +363,216 @@ test("audit failure after account/settings commit is explicit; failed operation 
     assert.equal(invalid.status, 400);
     assert.equal(invalid.json.error.code, "INVALID_REQUEST");
 });
+
+test("P1 admission errors use the management envelope and leave no new task", async t => {
+    const f = await fixture(t);
+    const item = { clientRef: "p1", credentials: credentials("p1") };
+    const cases = [
+        ["POST", "/accounts/import", { items: [item] }, {}, "IDEMPOTENCY_KEY_REQUIRED", 400],
+        [
+            "POST",
+            "/accounts/import",
+            { items: [{ ...item, clientRef: "" }] },
+            { "Idempotency-Key": "invalid-ref" },
+            "INVALID_REQUEST",
+            400,
+        ],
+        [
+            "POST",
+            "/accounts/import",
+            { items: [{ ...item, credentials: {} }] },
+            { "Idempotency-Key": "invalid-credential" },
+            "INVALID_CREDENTIALS",
+            400,
+        ],
+        [
+            "PUT",
+            `/accounts/${f.row.accountId}/credentials`,
+            { credentials: credentials("p1"), expectedCredentialVersion: 1 },
+            { "Idempotency-Key": "invalid-version-pair" },
+            "INVALID_REQUEST",
+            400,
+        ],
+        [
+            "POST",
+            `/accounts/${f.row.accountId}/test`,
+            { model: "bad/name" },
+            { "Idempotency-Key": "invalid-model" },
+            "INVALID_REQUEST",
+            400,
+        ],
+    ];
+    for (const [method, url, body, headers, code, status] of cases) {
+        const before = f.tasks.list().total;
+        const response = await f.request(method, url, body, headers);
+        assert.equal(response.status, status, response.text);
+        assert.equal(response.json.error.code, code);
+        assert.equal(response.json.error.message, failure(code).message);
+        assert.match(response.json.requestId, /^req_[a-f0-9-]{36}$/);
+        assert.equal(response.headers["x-request-id"], response.json.requestId);
+        assert.equal(f.tasks.list().total, before);
+    }
+    const endpoints = [
+        ["POST", "/accounts/import", { items: [item] }],
+        ["PUT", `/accounts/${f.row.accountId}/credentials`, { credentials: credentials("replacement") }],
+        ["POST", `/accounts/${f.row.accountId}/test`, { mode: "model" }],
+    ];
+    for (const [method, url, body] of endpoints) {
+        const unauthorized = await f.request(method, url, body, { Authorization: "Bearer wrong" });
+        assert.equal(unauthorized.status, 401);
+        assert.deepEqual(unauthorized.json.error, {
+            code: "UNAUTHORIZED",
+            message: failure("UNAUTHORIZED").message,
+        });
+        assert.equal(unauthorized.headers["x-request-id"], unauthorized.json.requestId);
+        f.setScopes([]);
+        const forbidden = await f.request(method, url, body, { "Idempotency-Key": `forbidden-${url}` });
+        assert.equal(forbidden.status, 403);
+        assert.equal(forbidden.json.error.code, "FORBIDDEN");
+        f.setScopes(spec["x-scope-templates"].admin);
+        const missingKey = await f.request(method, url, body);
+        assert.equal(missingKey.status, 400);
+        assert.equal(missingKey.json.error.code, "IDEMPOTENCY_KEY_REQUIRED");
+        assert.equal(f.tasks.list().total, 0);
+    }
+    const first = await f.request("POST", "/accounts/import", { items: [item] }, { "Idempotency-Key": "p1-accepted" });
+    assert.equal(first.status, 202);
+    const conflict = await f.request(
+        "POST",
+        "/accounts/import",
+        { items: [{ ...item, clientRef: "other" }] },
+        { "Idempotency-Key": "p1-accepted" }
+    );
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.json.error.code, "IDEMPOTENCY_CONFLICT");
+    assert.equal(f.tasks.list().total, 1);
+    const old = f.tasks.state.tasks;
+    f.tasks.state.tasks = Array.from({ length: 1000 }, () => old[0]);
+    try {
+        const limited = await f.request(
+            "POST",
+            "/accounts/import",
+            { items: [item] },
+            { "Idempotency-Key": "p1-full" }
+        );
+        assert.equal(limited.status, 429);
+        assert.equal(limited.json.error.code, "RATE_LIMITED");
+        assert.equal(f.tasks.state.tasks.length, 1000);
+        const replay = await f.request(
+            "POST",
+            "/accounts/import",
+            { items: [item] },
+            { "Idempotency-Key": "p1-accepted" }
+        );
+        assert.equal(replay.status, 202);
+        assert.equal(replay.json.data.taskId, first.json.data.taskId);
+    } finally {
+        f.tasks.state.tasks = old;
+    }
+});
+
+test("P1 disable conflict is pre-write, while ACCOUNT_BUSY and audit failure can follow a committed disable", async t => {
+    const f = await fixture(t);
+    const url = `/accounts/${f.row.accountId}`;
+    const before = f.accounts.get(f.row.accountId);
+    const stale = await f.request("PATCH", url, {
+        enabled: false,
+        expectedCredentialVersion: before.credentialVersion,
+        expectedStateVersion: before.stateVersion + 1,
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.json.error.code, "VERSION_CONFLICT");
+    assert.equal(f.accounts.get(f.row.accountId).stateVersion, before.stateVersion);
+    assert.equal(f.accounts.get(f.row.accountId).enabled, true);
+
+    f.system.managementDrainTimeoutMs = 0;
+    f.system.managementRuntime.hasActiveRequests = () => true;
+    const busy = await f.request("PATCH", url, {
+        enabled: false,
+        expectedCredentialVersion: before.credentialVersion,
+        expectedStateVersion: before.stateVersion,
+    });
+    assert.equal(busy.status, 409);
+    assert.equal(busy.json.error.code, "ACCOUNT_BUSY");
+    const disabled = (await f.request("GET", url)).json.data;
+    assert.equal(disabled.enabled, false);
+    assert.equal(disabled.credentialVersion, before.credentialVersion);
+    assert.notEqual(disabled.stateVersion, before.stateVersion);
+
+    f.system.managementRuntime.hasActiveRequests = () => false;
+    f.tasks.audit = () => {
+        throw failure("PERSISTENCE_ERROR");
+    };
+    const audit = await f.request("PATCH", url, {
+        enabled: false,
+        expectedCredentialVersion: disabled.credentialVersion,
+        expectedStateVersion: disabled.stateVersion,
+    });
+    assert.equal(audit.status, 500);
+    assert.equal(audit.json.error.code, "AUDIT_PERSISTENCE_FAILED");
+    assert.equal((await f.request("GET", url)).json.data.enabled, false);
+});
+
+test("P1 terminal import item without accountId does not prove account creation was absent", async t => {
+    const f = await fixture(t);
+    const create = f.store.create.bind(f.store);
+    f.store.create = async (...args) => {
+        await create(...args);
+        throw new Error("synthetic post-commit response loss");
+    };
+    const accepted = await f.request(
+        "POST",
+        "/accounts/import",
+        {
+            items: [{ clientRef: "post-commit", credentials: credentials("post-commit") }],
+        },
+        { "Idempotency-Key": "post-commit" }
+    );
+    assert.equal(accepted.status, 202);
+    f.tasks.start();
+    await f.tasks.worker;
+    const task = (await f.request("GET", `/tasks/${accepted.json.data.taskId}`)).json.data;
+    assert.equal(task.status, "failed");
+    assert.equal(task.items[0].clientRef, "post-commit");
+    assert.equal(task.items[0].accountId, undefined);
+    assert.equal(task.items[0].status, "failed");
+    assert.equal(task.result.changed, false);
+    assert.equal(f.store.listMetadata().length, 2);
+    assert.equal(f.store.listMetadata()[1].disabled, true);
+});
+
+test("P1 completed verification versions become stale after a later account state change", async t => {
+    const f = await fixture(t);
+    const accepted = await f.request(
+        "POST",
+        "/accounts/import",
+        {
+            items: [{ clientRef: "version-drift", credentials: credentials("version-drift") }],
+        },
+        { "Idempotency-Key": "version-drift" }
+    );
+    assert.equal(accepted.status, 202);
+    f.tasks.start();
+    await f.tasks.worker;
+    const task = (await f.request("GET", `/tasks/${accepted.json.data.taskId}`)).json.data;
+    const item = task.items[0];
+    assert.equal(task.status, "succeeded");
+    assert.equal(item.result.stage, "model_verified");
+    const before = (await f.request("GET", `/accounts/${item.accountId}`)).json.data;
+    assert.equal(item.result.credentialVersion, before.credentialVersion);
+    assert.equal(item.result.stateVersion, before.stateVersion);
+    const patch = await f.request("PATCH", `/accounts/${item.accountId}`, {
+        enabled: false,
+        expectedCredentialVersion: before.credentialVersion,
+        expectedStateVersion: before.stateVersion,
+    });
+    assert.equal(patch.status, 200);
+    const current = (await f.request("GET", `/accounts/${item.accountId}`)).json.data;
+    assert.equal(current.enabled, false);
+    assert.equal(current.credentialVersion, item.result.credentialVersion);
+    assert.notEqual(current.stateVersion, item.result.stateVersion);
+    assert.equal(
+        (await f.request("GET", `/tasks/${accepted.json.data.taskId}`)).json.data.items[0].result.stateVersion,
+        item.result.stateVersion
+    );
+});

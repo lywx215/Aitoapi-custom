@@ -378,6 +378,13 @@ class ManagementTaskService {
         // Callers validate attribution; no credentialState or arbitrary error strings leave this boundary.
         return {
             authIndex: value.authIndex,
+            ...(value.success === true &&
+            Number.isSafeInteger(value.credentialVersion) &&
+            value.credentialVersion > 0 &&
+            Number.isSafeInteger(value.stateVersion) &&
+            value.stateVersion > 0
+                ? { credentialVersion: value.credentialVersion, stateVersion: value.stateVersion }
+                : {}),
             model: value.model,
             requestId: value.requestId,
             stage: [

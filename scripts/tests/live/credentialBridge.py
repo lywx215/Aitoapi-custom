@@ -121,6 +121,70 @@ def run(options):
                             ).slice(0, 12)
                         };
                     }""")
+                    identity_page = context.new_page()
+                    try:
+                        identity_response = identity_page.goto(
+                            "https://aistudio.google.com/", wait_until="domcontentloaded", timeout=60000
+                        )
+                        identity_page.wait_for_timeout(10000)
+                        identity_facts = identity_page.evaluate("""() => ({
+                            origin: location.origin, pathname: location.pathname,
+                            hasWizData: !!window.WIZ_global_data,
+                            wizEmail: typeof window.WIZ_global_data?.oPEP7c === 'string'
+                                ? window.WIZ_global_data.oPEP7c : null,
+                            signIn: /sign in|verify it.s you/i.test(document.body?.innerText || ''),
+                            frameCount: window.frames.length
+                        })""")
+                        result["identityPage"] = {
+                            "origin": identity_facts["origin"],
+                            "pathname": identity_facts["pathname"],
+                            "navigationStatus": identity_response.status if identity_response else None,
+                            "hasWizData": identity_facts["hasWizData"],
+                            "trustedEmailPresent": bool(identity_facts["wizEmail"]),
+                            "trustedEmailMatchesArtifact": (
+                                str(identity_facts["wizEmail"] or "").strip().lower() == email
+                            ),
+                            "signIn": identity_facts["signIn"],
+                            "frameCount": identity_facts["frameCount"],
+                        }
+                        result["identityPage"]["firstPartyIdentitySignals"] = []
+                        for frame in identity_page.frames:
+                            if urlsplit(frame.url).hostname != "aistudio.google.com":
+                                continue
+                            signal = frame.evaluate("""expected => {
+                                const equal = value => typeof value === 'string' &&
+                                    value.trim().toLowerCase() === expected;
+                                const nodes = [...document.querySelectorAll('*')];
+                                const attributes = ['data-email', 'data-identifier', 'aria-label', 'title'];
+                                const matches = nodes.filter(node =>
+                                    node.children.length === 0 && equal(node.textContent));
+                                return {
+                                    origin: location.origin, pathname: location.pathname,
+                                    exactAttributeMatches: nodes.filter(node =>
+                                        attributes.some(name => equal(node.getAttribute(name)))).length,
+                                    exactTextMatches: matches.length,
+                                    exactTextLocations: matches.slice(0, 3).map(node => ({
+                                        tag: node.tagName.toLowerCase(),
+                                        parentTag: node.parentElement?.tagName.toLowerCase() || null,
+                                        inDialog: !!node.closest('[role="dialog"]'),
+                                        inButton: !!node.closest('button,[role="button"]'),
+                                        inLink: !!node.closest('a'),
+                                        inAccountMenu: !!node.closest('[aria-label*="Google Account"]'),
+                                        parentButtonIsAccountControl: /google account|switch account|manage your account/i.test(
+                                            node.closest('button,[role="button"]')?.getAttribute('aria-label') || ''
+                                        ),
+                                        parentButtonInHeader: !!node.closest('header,[role="banner"]'),
+                                        visible: !!node.getClientRects().length,
+                                    })),
+                                    accountMenuCandidates: nodes.filter(node => {
+                                        const label = (node.getAttribute('aria-label') || '').toLowerCase();
+                                        return /google account|manage your account|switch account/.test(label);
+                                    }).length
+                                };
+                            }""", email)
+                            result["identityPage"]["firstPartyIdentitySignals"].append(signal)
+                    finally:
+                        identity_page.close()
                 finally:
                     browser.close()
             return result

@@ -447,6 +447,18 @@ test("current-session metadata reader ignores arbitrary page emails and untruste
     assert.equal(read("https://aistudio.google.com/", alpha.accountName).identity.email, alpha.accountName);
 });
 
+test("an iframe email cannot identify the top-level AI Studio session", () => {
+    const top = { WIZ_global_data: undefined };
+    top.frames = [{ WIZ_global_data: { oPEP7c: alpha.accountName } }];
+    const result = vm.runInNewContext(`(${BrowserAdapter.inspectSessionPage.toString()})()`, {
+        document: { querySelectorAll: () => [] },
+        location: { href: "https://aistudio.google.com/apps/test" },
+        URL,
+        window: top,
+    });
+    assert.equal(result.stage, "identity_unconfirmed");
+});
+
 test("init script redirects only its own context's production endpoint and rejects wrong index", () => {
     const urls = [];
     class Native {
@@ -493,6 +505,10 @@ test("real browser adapter closes browser acquired after cancellation", async ()
 test("real adapter accepts ConfigLoader default ai.studio entry and follows the browser redirect", async () => {
     const { firefox } = require("playwright");
     const originalLaunch = firefox.launch;
+    const previousProxy = process.env.HTTPS_PROXY;
+    const previousBypass = process.env.NO_PROXY;
+    process.env.HTTPS_PROXY = "http://fixture-user:fixture-pass@proxy.example.invalid:8080";
+    process.env.NO_PROXY = "fixture.internal";
     const calls = {};
     const config = defaultConfig();
     assert.match(config.aiStudioAppUrl, /^https:\/\/ai\.studio\/apps\//);
@@ -549,6 +565,13 @@ test("real adapter accepts ConfigLoader default ai.studio entry and follows the 
         });
         assert.equal(calls.launch.headless, true);
         assert.equal(calls.launch.executablePath, "fixture-browser");
+        assert.deepEqual(calls.launch.proxy, {
+            bypass: "localhost,127.0.0.1,::,::1,0.0.0.0,fixture.internal",
+            password: "fixture-pass",
+            server: "http://proxy.example.invalid:8080",
+            username: "fixture-user",
+        });
+        assert.deepEqual(calls.context.proxy, calls.launch.proxy);
         assert.deepEqual(calls.context.storageState, { cookies: beta.cookies, origins: beta.origins });
         assert.equal(calls.script, BrowserAdapter.installIsolation);
         assert.equal(calls.scriptArgs.index, 8);
@@ -558,6 +581,10 @@ test("real adapter accepts ConfigLoader default ai.studio entry and follows the 
         assert(calls.contextClosed && calls.browserClosed);
     } finally {
         firefox.launch = originalLaunch;
+        if (previousProxy === undefined) delete process.env.HTTPS_PROXY;
+        else process.env.HTTPS_PROXY = previousProxy;
+        if (previousBypass === undefined) delete process.env.NO_PROXY;
+        else process.env.NO_PROXY = previousBypass;
         await adapter.close();
     }
 });

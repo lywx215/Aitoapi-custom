@@ -1,6 +1,7 @@
 /* global window, document, location */
 const path = require("path");
 const { VerificationError, abortable } = require("./VerifierSupport");
+const { parseProxyFromEnv } = require("../utils/ProxyUtils");
 
 // Executed before scripts in every frame of this owned verification page only.
 function installIsolation({ index, endpoint }) {
@@ -108,12 +109,16 @@ class VerifierBrowserAdapter {
                       ? ["camoufox-macos", "Camoufox.app", "Contents", "MacOS", "camoufox"]
                       : ["camoufox-linux", "camoufox"])
             );
+        // Match the production browser's environment proxy while keeping the
+        // verification browser and storage state isolated from production.
+        const proxy = parseProxyFromEnv();
         const browser = await this.acquire(
             require("playwright").firefox.launch({
                 executablePath,
                 firefoxUserPrefs: { "network.trr.mode": 5, "network.trr.uri": "" },
                 headless: true,
                 timeout: 30000,
+                ...(proxy ? { proxy } : {}),
             }),
             "browser",
             signal
@@ -122,6 +127,7 @@ class VerifierBrowserAdapter {
             browser.newContext({
                 storageState: { cookies: credentials.cookies, origins: credentials.origins },
                 viewport: { height: 900, width: 1440 },
+                ...(proxy ? { proxy } : {}),
             }),
             "context",
             signal

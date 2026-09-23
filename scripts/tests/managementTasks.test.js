@@ -410,6 +410,99 @@ test("failed import can be replaced and manually enabled; manual disable wins re
     assert.equal(f.accounts.get(row.accountId).enabled, false);
 });
 
+test("account patch accepts an optional credential and state version pair", async t => {
+    const f = fixture(t, verified);
+    const imported = f.submit("import", { items: [{ clientRef: "alpha", credentials: credentials("alpha") }] });
+    f.tasks.start();
+    assert.equal((await done(f.tasks, imported.taskId)).status, "succeeded");
+    const accountId = f.store.getMetadata(0).accountId;
+    const first = f.accounts.get(accountId);
+    await f.accounts.patch(accountId, {
+        enabled: false,
+        expectedCredentialVersion: first.credentialVersion,
+        expectedStateVersion: first.stateVersion,
+    }, { keyId: "key-a" });
+    assert.equal(f.accounts.get(accountId).enabled, false);
+    await assert.rejects(
+        f.accounts.patch(accountId, {
+            enabled: true,
+            expectedCredentialVersion: first.credentialVersion,
+            expectedStateVersion: first.stateVersion,
+        }, { keyId: "key-a" }),
+        { code: "VERSION_CONFLICT" }
+    );
+    assert.equal(f.accounts.get(accountId).enabled, false);
+    const current = f.accounts.get(accountId);
+    await f.accounts.patch(accountId, {
+        enabled: true,
+        expectedCredentialVersion: current.credentialVersion,
+        expectedStateVersion: current.stateVersion,
+    }, { keyId: "key-a" });
+    assert.equal(f.accounts.get(accountId).enabled, true);
+    await assert.rejects(f.accounts.patch(accountId, {
+        enabled: false,
+        expectedCredentialVersion: current.credentialVersion,
+    }, { keyId: "key-a" }), { code: "INVALID_REQUEST" });
+});
+
+test("replacement accepts versioned envelope while preserving legacy credential body", async t => {
+    const f = fixture(t, verified);
+    const imported = f.submit("import", { items: [{ clientRef: "alpha", credentials: credentials("alpha") }] });
+    f.tasks.start();
+    assert.equal((await done(f.tasks, imported.taskId)).status, "succeeded");
+    const accountId = f.store.getMetadata(0).accountId;
+    const first = f.accounts.get(accountId);
+    const replaced = f.submit("replace", {
+        credentials: credentials("alpha"),
+        expectedCredentialVersion: first.credentialVersion,
+        expectedStateVersion: first.stateVersion,
+    }, accountId);
+    assert.equal((await done(f.tasks, replaced.taskId)).status, "succeeded");
+    const current = f.accounts.get(accountId);
+    const stale = f.submit("replace", {
+        credentials: credentials("alpha"),
+        expectedCredentialVersion: first.credentialVersion,
+        expectedStateVersion: first.stateVersion,
+    }, accountId);
+    assert.equal((await done(f.tasks, stale.taskId)).items[0].error.code, "VERSION_CONFLICT");
+    assert.equal(f.accounts.get(accountId).credentialVersion, current.credentialVersion);
+    assert.throws(() => f.submit("replace", {
+        credentials: credentials("alpha"), expectedCredentialVersion: current.credentialVersion,
+    }, accountId), { code: "INVALID_REQUEST" });
+});
+
+test("successful verification records committed versions rather than later account versions", async t => {
+    const f = fixture(t, verified);
+    const imported = f.submit("import", { items: [{ clientRef: "alpha", credentials: credentials("alpha") }] });
+    f.tasks.start();
+    const importItem = (await done(f.tasks, imported.taskId)).items[0];
+    const accountId = importItem.accountId;
+    const original = f.accounts.get(accountId);
+    assert.equal(importItem.result.credentialVersion, original.credentialVersion);
+    assert.equal(importItem.result.stateVersion, original.stateVersion);
+    assert.equal(importItem.result.stage, "model_verified");
+
+    await f.accounts.patch(accountId, { enabled: false }, { keyId: "key-a" });
+    const disabled = f.accounts.get(accountId);
+    assert.notEqual(importItem.result.stateVersion, disabled.stateVersion);
+    assert.deepEqual(f.tasks.get(imported.taskId).items[0].result, importItem.result);
+
+    const replaced = f.submit("replace", credentials("alpha"), accountId);
+    const replaceItem = (await done(f.tasks, replaced.taskId)).items[0];
+    const afterReplace = f.accounts.get(accountId);
+    assert.equal(replaceItem.result.credentialVersion, afterReplace.credentialVersion);
+    assert.equal(replaceItem.result.stateVersion, afterReplace.stateVersion);
+    assert.notEqual(importItem.result.credentialVersion, afterReplace.credentialVersion);
+
+    const tested = f.submit("test", { mode: "model", model: "gemini-3.8-flash" }, accountId);
+    const testItem = (await done(f.tasks, tested.taskId)).items[0];
+    assert.equal(testItem.result.credentialVersion, afterReplace.credentialVersion);
+    assert.equal(testItem.result.stateVersion, afterReplace.stateVersion);
+    await f.accounts.patch(accountId, { enabled: true }, { keyId: "key-a" });
+    assert.notEqual(testItem.result.stateVersion, f.accounts.get(accountId).stateVersion);
+    assert.equal(f.tasks.get(tested.taskId).items[0].result.stateVersion, testItem.result.stateVersion);
+});
+
 test("shutdown interrupts active verification without replay and preserves queued inputs", async t => {
     const entered = deferred();
     const f = fixture(

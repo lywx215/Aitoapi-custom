@@ -322,13 +322,38 @@
                     "enabled": {
                         "type": "boolean"
                     },
+                    "expectedCredentialVersion": {
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "expectedStateVersion": {
+                        "minimum": 1,
+                        "type": "integer"
+                    },
                     "force": {
                         "default": false,
                         "type": "boolean"
                     }
                 },
+                "description": "Optional expectedCredentialVersion and expectedStateVersion must be supplied together. A mismatch returns VERSION_CONFLICT (409).",
                 "required": ["enabled"],
                 "type": "object"
+            },
+            "CredentialReplaceInput": {
+                "description": "Legacy raw storageState remains accepted. Versioned clients wrap it and supply both expected versions.",
+                "oneOf": [
+                    { "$ref": "#/components/schemas/CredentialInput" },
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["credentials", "expectedCredentialVersion", "expectedStateVersion"],
+                        "properties": {
+                            "credentials": { "$ref": "#/components/schemas/CredentialInput" },
+                            "expectedCredentialVersion": { "type": "integer", "minimum": 1 },
+                            "expectedStateVersion": { "type": "integer", "minimum": 1 }
+                        }
+                    }
+                ]
             },
             "AuditEntry": {
                 "additionalProperties": false,
@@ -1551,10 +1576,14 @@
             },
             "VerificationResult": {
                 "additionalProperties": false,
-                "description": "Public verification result. Internal credentialState must never be serialized here. Connection mode is not proof of a model result.",
+                "description": "Public verification result. Successful import/replace/test items may include the credential/state versions verified at commit or readback. These fields are optional for failed and legacy tasks. Internal credentialState must never be serialized here. Connection mode is not proof of a model result.",
                 "properties": {
                     "authIndex": {
                         "minimum": 0,
+                        "type": "integer"
+                    },
+                    "credentialVersion": {
+                        "minimum": 1,
                         "type": "integer"
                     },
                     "model": {
@@ -1565,6 +1594,10 @@
                     },
                     "stage": {
                         "type": "string"
+                    },
+                    "stateVersion": {
+                        "minimum": 1,
+                        "type": "integer"
                     },
                     "success": {
                         "type": "boolean"
@@ -1866,7 +1899,7 @@
         },
         "/api/manage/v1/accounts/{id}/credentials": {
             "put": {
-                "description": "Verify an isolated candidate and replace only credentials using expected credential/state versions. Preserve newer manual flags. Do not expose candidate state in task/audit.",
+                "description": "Verify an isolated candidate and replace only credentials. A versioned envelope rejects stale remote snapshots; legacy raw storageState remains compatible. Preserve newer manual flags. Do not expose candidate state in task/audit.",
                 "operationId": "replaceAccountCredentials",
                 "parameters": [
                     {
@@ -1880,7 +1913,7 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/CredentialInput"
+                                "$ref": "#/components/schemas/CredentialReplaceInput"
                             }
                         }
                     },
