@@ -447,12 +447,18 @@ class CredentialStore {
     async replace(index, content, options = {}) {
         this._index(index);
         if (options.uploadOperation && options.uploadOperation.kind !== "replace") throw invalidReceipt();
+        if (options.enable !== undefined && typeof options.enable !== "boolean")
+            throw error("INVALID_STATE", 400, "Invalid replacement enable option");
         const data = CredentialStore.validate(content);
         return this._enqueue(index, () => {
             const record = this._active(index, options);
             for (const key of STATE_FIELDS) delete data[key];
-            Object.assign(data, this._stateFields(record));
-            return this._save(record, data, { credential: true, uploadOperation: options.uploadOperation });
+            if (!options.enable) Object.assign(data, this._stateFields(record));
+            return this._save(record, data, {
+                credential: true,
+                state: hash(this._stateFields(data)) !== record.stateHash,
+                uploadOperation: options.uploadOperation,
+            });
         });
     }
 

@@ -119,6 +119,34 @@ test("replacement preserves latest control flags and rejects stale credential/st
     assert.equal(noOp.stateVersion, 2);
 });
 
+test("enabled replacement commits credentials and state together or rolls both back", async () => {
+    const env = setup();
+    const store = env.store();
+    const created = await store.create(fixture(), { disabled: true, reason: "manual" });
+    const before = fs.readFileSync(path.join(env.authDir, "auth-0.json"), "utf8");
+    const undo = failWrite(store, file => file === store.metadataPath);
+    await assert.rejects(
+        store.replace(created.index, fixture("new@example.invalid"), {
+            enable: true,
+            expectedCredentialVersion: created.credentialVersion,
+            expectedStateVersion: created.stateVersion,
+        }),
+        { code: "PERSISTENCE_ERROR" }
+    );
+    undo();
+    assert.equal(fs.readFileSync(path.join(env.authDir, "auth-0.json"), "utf8"), before);
+    assert.equal(env.store().getMetadata(created.index).disabled, true);
+    const result = await store.replace(created.index, fixture("new@example.invalid"), {
+        enable: true,
+        expectedCredentialVersion: created.credentialVersion,
+        expectedStateVersion: created.stateVersion,
+    });
+    assert.equal(result.credentialVersion, created.credentialVersion + 1);
+    assert.equal(result.stateVersion, created.stateVersion + 1);
+    assert.equal(store.read(created.index).disabled, undefined);
+    assert.equal(env.store().getMetadata(created.index).disabled, undefined);
+});
+
 test("refresh discards stale snapshots after replacement while preserving manual flags", async () => {
     const store = setup().store();
     const created = await store.create(fixture());

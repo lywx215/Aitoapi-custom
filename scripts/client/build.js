@@ -62,6 +62,9 @@ const Logger = {
             logElement.textContent = `${levelLabel}: ${messages.join(" ")}`;
         }
         document.body.appendChild(logElement);
+        if (logElement.dataset) logElement.dataset.proxyLog = "1";
+        const logs = document.querySelectorAll?.('[data-proxy-log="1"]') || [];
+        if (logs.length > 200) logs[0].remove();
     },
 
     // [BrowserManager Injection Point] Do not modify the line below.
@@ -147,6 +150,7 @@ class ConnectionManager extends EventTarget {
                 this.socket.addEventListener("open", () => {
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
+                    this.transmit({ event_type: "generation_capabilities", protocol_version: 2 });
                     Logger.output("✅ Connection successful!");
                     this.dispatchEvent(new CustomEvent("connected"));
                     resolve();
@@ -267,11 +271,13 @@ class RequestProcessor {
                 const response = await fetch(requestUrl, requestConfig);
 
                 if (!response.ok) {
-                    const errorBody = await response.text();
+                    const errorBody = requestSpec.is_generative ? "" : await response.text();
+                    if (requestSpec.is_generative) await response.body?.cancel();
                     const error = new Error(
                         `Google API returned error: ${response.status} ${response.statusText} ${errorBody}`
                     );
                     error.status = response.status;
+                    error.error_code = "http_error";
                     throw error;
                 }
                 // Clear timeout when fetch succeeds to prevent timer leak
@@ -704,6 +710,10 @@ class ProxySystem extends EventTarget {
                     if (Logger.LEVELS[requestSpec.level] !== undefined) {
                         const oldLevel = Object.keys(Logger.LEVELS).find(k => Logger.LEVELS[k] === Logger.currentLevel);
                         Logger.currentLevel = Logger.LEVELS[requestSpec.level];
+                        if (requestSpec.level !== "DEBUG" && this.diagnostics) {
+                            for (const diagnostic of this.diagnostics.values()) diagnostic.enabled = false;
+                            this.diagnostics.clear();
+                        }
                         Logger.info(`Log level changed: ${oldLevel} -> ${requestSpec.level}`);
                     } else {
                         Logger.warn(`Invalid log level: ${requestSpec.level}`);
@@ -731,6 +741,22 @@ class ProxySystem extends EventTarget {
         const requestAttemptId = this.requestProcessor._normalizeAttemptId(operationId, requestSpec.request_attempt_id);
         const attemptKey = this.requestProcessor._getAttemptKey(operationId, requestAttemptId);
         const mode = requestSpec.streaming_mode || "fake";
+        const diagnostic =
+            requestSpec.diagnostic_enabled === true && Logger.currentLevel === Logger.LEVELS.DEBUG
+                ? {
+                      browserDataUtf8Bytes: 0,
+                      browserReadBytes: 0,
+                      browserReadChunks: 0,
+                      browserWsChunks: 0,
+                      enabled: true,
+                      started: performance.now(),
+                  }
+                : null;
+        if (diagnostic) {
+            this.diagnostics ||= new Map();
+            this.diagnostics.set(requestAttemptId, diagnostic);
+        }
+        let closeReason = "error";
         Logger.debug(`Browser received request`);
         let cancelTimeout;
         let reader;
@@ -755,13 +781,24 @@ class ProxySystem extends EventTarget {
 
             this._transmitHeaders(response, operationId, requestAttemptId, requestSpec.headers?.host);
             reader = response.body.getReader();
-            const textDecoder = new TextDecoder();
-
-            let fullBody = "";
+            const textDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+            const decode = (value, stream) => {
+                try {
+                    return textDecoder.decode(value, { stream });
+                } catch {
+                    throw Object.assign(new Error("Invalid upstream UTF-8"), {
+                        error_code: "invalid_utf8",
+                        status: 502,
+                    });
+                }
+            };
 
             // --- Core modification: Correctly dispatch streaming and non-streaming data inside the loop ---
             // Browser-side safety cap for each chunk read.
-            const CHUNK_READ_TIMEOUT = 300000; // 300 seconds (5 minutes)
+            const CHUNK_READ_TIMEOUT =
+                requestSpec.is_generative && Number.isFinite(requestSpec.stream_idle_timeout_ms)
+                    ? Math.max(1, Math.min(300000, requestSpec.stream_idle_timeout_ms))
+                    : 300000;
             let processing = true;
             while (processing) {
                 // Check if WebSocket is still connected
@@ -804,18 +841,22 @@ class ProxySystem extends EventTarget {
                     chunkTimeoutId = null;
 
                     if (done) {
+                        const tail = decode(undefined, false);
+                        if (tail) await this._transmitChunk(tail, operationId, requestAttemptId, diagnostic);
+                        closeReason = "completed";
                         processing = false;
                         break;
                     }
 
                     cancelTimeout();
 
-                    const chunk = textDecoder.decode(value, { stream: true });
-                    if (mode === "real") {
-                        this._transmitChunk(chunk, operationId, requestAttemptId);
-                    } else {
-                        fullBody += chunk;
+                    if (diagnostic?.enabled && Logger.currentLevel === Logger.LEVELS.DEBUG) {
+                        diagnostic.browserReadBytes += value.byteLength;
+                        diagnostic.browserReadChunks++;
                     }
+                    const chunk = decode(value, true);
+                    // All modes use bounded transport chunks. The server buffers JSON/fake responses.
+                    await this._transmitChunk(chunk, operationId, requestAttemptId, diagnostic);
                 } catch (error) {
                     if (chunkTimeoutId) {
                         clearTimeout(chunkTimeoutId);
@@ -857,12 +898,7 @@ class ProxySystem extends EventTarget {
                 return;
             }
 
-            if (mode === "fake") {
-                // In non-streaming mode, after loop ends, forward the concatenated complete response body
-                this._transmitChunk(fullBody, operationId, requestAttemptId);
-            }
-
-            this._transmitStreamEnd(operationId, requestAttemptId);
+            if (closeReason === "completed") this._transmitStreamEnd(operationId, requestAttemptId);
         } catch (error) {
             const wasCancelled = isOperationCancelled();
             if (wasCancelled) {
@@ -873,6 +909,7 @@ class ProxySystem extends EventTarget {
                 Logger.output(`Request processing failed: ${error.message}`);
             }
             if (wasCancelled) {
+                closeReason = "aborted";
                 return;
             }
             // Only send error if we still own this operationId (prevent stale errors from reaching server during retries)
@@ -886,6 +923,9 @@ class ProxySystem extends EventTarget {
                 Logger.debug(`[Diagnosis] Suppressing error for superseded operation #${operationId}`);
             }
         } finally {
+            if (isOperationCancelled()) closeReason = "aborted";
+            // Abort fetch before awaiting reader cleanup, so blocked reads can settle.
+            if (closeReason !== "completed") abortController?.abort();
             // Clean up timeout - safe to call even if cancelTimeout is undefined
             if (cancelTimeout && typeof cancelTimeout === "function") {
                 cancelTimeout();
@@ -911,6 +951,32 @@ class ProxySystem extends EventTarget {
                 // Only delete from cancelledAttempts if we own the operation
                 this.requestProcessor.cancelledAttempts.delete(attemptKey);
             }
+            if (requestSpec.is_generative && this.connectionManager.isConnected) {
+                const summary =
+                    diagnostic?.enabled && Logger.currentLevel === Logger.LEVELS.DEBUG
+                        ? {
+                              browserDataUtf8Bytes: diagnostic.browserDataUtf8Bytes,
+                              browserDurationMs: Math.round(performance.now() - diagnostic.started),
+                              browserReadBytes: diagnostic.browserReadBytes,
+                              browserReadChunks: diagnostic.browserReadChunks,
+                              browserWsChunks: diagnostic.browserWsChunks,
+                              mode,
+                          }
+                        : undefined;
+                try {
+                    this.connectionManager.transmit({
+                        diagnostic: summary,
+                        event_type: "attempt_closed",
+                        protocol_version: 2,
+                        reason: isOperationCancelled() ? "aborted" : closeReason,
+                        request_attempt_id: requestAttemptId,
+                        request_id: operationId,
+                    });
+                } catch {
+                    /* A disconnected transport cannot acknowledge cleanup. */
+                }
+            }
+            this.diagnostics?.delete(requestAttemptId);
         }
     }
 
@@ -943,14 +1009,39 @@ class ProxySystem extends EventTarget {
         });
     }
 
-    _transmitChunk(data, operationId, requestAttemptId) {
+    async _transmitChunk(data, operationId, requestAttemptId, diagnostic = null) {
         if (!data) return;
-        this.connectionManager.transmit({
-            data,
-            event_type: "chunk",
-            request_attempt_id: requestAttemptId,
-            request_id: operationId,
-        });
+        for (let position = 0; position < data.length;) {
+            const attemptKey = this.requestProcessor._getAttemptKey(operationId, requestAttemptId);
+            if (!this.connectionManager.isConnected || this.requestProcessor.cancelledAttempts.has(attemptKey))
+                throw new DOMException("Request cancelled", "AbortError");
+            let end = Math.min(data.length, position + 65536);
+            if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1])) end--;
+            const started = Date.now();
+            while ((this.connectionManager.socket?.bufferedAmount || 0) > 1024 * 1024) {
+                const key = this.requestProcessor._getAttemptKey(operationId, requestAttemptId);
+                if (!this.connectionManager.isConnected || this.requestProcessor.cancelledAttempts.has(key))
+                    throw new DOMException("Request cancelled", "AbortError");
+                if (Date.now() - started > 60000)
+                    throw Object.assign(new Error("Browser send buffer timeout"), {
+                        error_code: "resource_exhausted",
+                        status: 503,
+                    });
+                await new Promise(resolve => setTimeout(resolve, 25));
+            }
+            const chunk = data.slice(position, end);
+            this.connectionManager.transmit({
+                data: chunk,
+                event_type: "chunk",
+                request_attempt_id: requestAttemptId,
+                request_id: operationId,
+            });
+            if (diagnostic?.enabled && Logger.currentLevel === Logger.LEVELS.DEBUG) {
+                diagnostic.browserWsChunks++;
+                diagnostic.browserDataUtf8Bytes += new TextEncoder().encode(chunk).byteLength;
+            }
+            position = end;
+        }
     }
 
     _transmitStreamEnd(operationId, requestAttemptId) {
@@ -965,6 +1056,13 @@ class ProxySystem extends EventTarget {
     _sendErrorResponse(error, operationId, requestAttemptId) {
         if (!operationId) return;
         this.connectionManager.transmit({
+            error_code:
+                error.error_code ||
+                (error.name === "AbortError"
+                    ? "aborted"
+                    : String(error.message).includes("timeout")
+                      ? "read_timeout"
+                      : "network_error"),
             event_type: "error",
             message: `Proxy browser error: ${error.message || "Unknown error"}`,
             request_attempt_id: requestAttemptId,

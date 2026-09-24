@@ -38,6 +38,7 @@ class ConnectionRegistry extends EventEmitter {
         this.reconnectingAccounts = new Map();
         // Map: authIndex -> timeoutId, stores lightweight reconnect timeout timers
         this.lightweightReconnectTimeouts = new Map();
+        this.generationAttempts = new Map();
     }
 
     addConnection(websocket, clientInfo) {
@@ -106,7 +107,7 @@ class ConnectionRegistry extends EventEmitter {
         // Store authIndex on websocket for cleanup
         websocket._authIndex = authIndex;
 
-        websocket.on("message", data => this._handleIncomingMessage(data.toString(), authIndex));
+        websocket.on("message", data => this._handleIncomingMessage(data.toString(), authIndex, websocket));
         websocket.on("close", () => this._removeConnection(websocket));
         websocket.on("error", error =>
             this.logger.error(`[Server] Internal WebSocket connection error: ${error.message}`)
@@ -243,9 +244,60 @@ class ConnectionRegistry extends EventEmitter {
         this.emit("connectionRemoved", websocket);
     }
 
-    _handleIncomingMessage(messageData, messageAuthIndex) {
+    _handleIncomingMessage(messageData, messageAuthIndex, websocket = null) {
         try {
             const parsedMessage = JSON.parse(messageData);
+            if (parsedMessage.event_type === "generation_capabilities") {
+                const connection = websocket || this.connectionsByAuth.get(messageAuthIndex);
+                if (connection && this.connectionsByAuth.get(messageAuthIndex) === connection) {
+                    connection.generationProtocolVersion = parsedMessage.protocol_version === 2 ? 2 : 0;
+                    connection.send(
+                        JSON.stringify({
+                            event_type: "set_log_level",
+                            level: require("../utils/LoggingService").getLevel(),
+                        })
+                    );
+                }
+                return;
+            }
+            if (parsedMessage.event_type === "attempt_closed") {
+                const entry = this.generationAttempts.get(parsedMessage.request_attempt_id);
+                if (
+                    entry &&
+                    parsedMessage.protocol_version === 2 &&
+                    entry.authIndex === messageAuthIndex &&
+                    entry.requestId === parsedMessage.request_id &&
+                    (!websocket || entry.connection === websocket)
+                ) {
+                    if (entry.closed) return;
+                    entry.closed = true;
+                    entry.reason = ["completed", "aborted", "error"].includes(parsedMessage.reason)
+                        ? parsedMessage.reason
+                        : "error";
+                    if (require("../utils/LoggingService").isDebugEnabled()) {
+                        this.logger.diagnostic?.("INFO", "generation.browser_closed", () => ({
+                            ...parsedMessage.diagnostic,
+                            ackState: "closed",
+                            attemptId: parsedMessage.request_attempt_id,
+                            authIndex: entry.authIndex,
+                            closeCause: entry.reason,
+                            requestId: entry.requestId,
+                        }));
+                    }
+                    for (const resolve of entry.waiters) resolve(true);
+                    entry.waiters.clear();
+                }
+                return;
+            }
+            const completedAttempt = this.generationAttempts.get(parsedMessage.request_attempt_id);
+            if (completedAttempt?.timer) {
+                this.logger.diagnostic?.("DEBUG", "generation.stale_message", () => ({
+                    attemptId: parsedMessage.request_attempt_id,
+                    authIndex: messageAuthIndex,
+                    requestId: completedAttempt.requestId,
+                }));
+                return;
+            }
             const requestId = parsedMessage.request_id;
             if (!requestId) {
                 this.logger.warn("[Server] Received invalid message: missing request_id");
@@ -277,6 +329,50 @@ class ConnectionRegistry extends EventEmitter {
         } catch (error) {
             this.logger.error(`[Server] Failed to parse internal WebSocket message: ${error.message}`);
         }
+    }
+
+    registerGenerationAttempt(requestId, attemptId, authIndex) {
+        if (this.generationAttempts.size >= 4096) {
+            throw Object.assign(new Error("generation attempt capacity exhausted"), {
+                code: "resource_exhausted",
+                status: 503,
+            });
+        }
+        this.generationAttempts.set(attemptId, {
+            authIndex,
+            closed: false,
+            connection: this.connectionsByAuth.get(authIndex),
+            diagnostic: null,
+            requestId,
+            waiters: new Set(),
+        });
+    }
+
+    waitForGenerationAttempt(attemptId, timeoutMs = 2000, signal = null) {
+        const entry = this.generationAttempts.get(attemptId);
+        if (entry?.closed) return Promise.resolve(true);
+        if (!entry || signal?.aborted) return Promise.resolve(false);
+        return new Promise(resolve => {
+            const finish = value => {
+                clearTimeout(timer);
+                entry.waiters.delete(finish);
+                signal?.removeEventListener("abort", abort);
+                resolve(value);
+            };
+            const abort = () => finish(false);
+            const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
+            entry.waiters.add(finish);
+            signal?.addEventListener("abort", abort, { once: true });
+        });
+    }
+
+    releaseGenerationAttempt(attemptId) {
+        const entry = this.generationAttempts.get(attemptId);
+        if (!entry || entry.timer) return;
+        for (const resolve of entry.waiters) resolve(false);
+        entry.diagnostic = null;
+        entry.timer = setTimeout(() => this.generationAttempts.delete(attemptId), 60000);
+        entry.timer.unref?.();
     }
 
     _routeMessage(message, queue) {

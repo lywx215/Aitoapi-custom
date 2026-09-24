@@ -103,11 +103,11 @@ function fixture(t, verify = async input => verified(input)) {
     return { accounts, active, calls, keys, rootDir, store, submit, system, tasks };
 }
 
-test("two isolated fixture imports enable only after matching model verification and keep public files secret-free", async t => {
+test("two fixture imports are enabled before isolated verification and keep public files secret-free", async t => {
     const inputs = [];
     const f = fixture(t, async input => {
         inputs.push(input);
-        assert.equal(f.store.getMetadata(input.index).disabledReason, "pending_verification");
+        assert.equal(f.accounts.get(f.store.getMetadata(input.index).accountId).enabled, true);
         return verified(input);
     });
     const body = { items: ["alpha", "beta"].map(name => ({ clientRef: name, credentials: credentials(name) })) };
@@ -166,7 +166,7 @@ test("whole import structure is rejected before admission; duplicate email never
     assert.equal(f.store.listMetadata().length, 1);
 });
 
-test("target failure and mismatched attribution never fall back or autoenable", async t => {
+test("target failure and mismatched attribution never fall back or disable committed imports", async t => {
     for (const mode of ["fail", "index", "model", "stage", "requestId"]) {
         const f = fixture(t, async input => {
             if (input.index === 0) return verified(input);
@@ -189,7 +189,7 @@ test("target failure and mismatched attribution never fall back or autoenable", 
         const task = await done(f.tasks, accepted.taskId);
         assert.equal(task.status, "partial");
         assert.equal(task.items[1].error.code, "VERIFICATION_FAILED");
-        assert.equal(f.accounts.list().items[1].enabled, false);
+        assert.equal(f.accounts.list().items[1].enabled, true);
         assert(!JSON.stringify(task).includes("SECRET"));
     }
 });
@@ -211,7 +211,7 @@ test("manual disable and credential replacement win the double-version CAS", asy
         release.resolve();
         const task = await done(f.tasks, accepted.taskId);
         assert.equal(task.items[0].error.code, "VERSION_CONFLICT");
-        assert.equal(f.store.getMetadata(0).disabled, true);
+        assert.equal(f.accounts.get(f.store.getMetadata(0).accountId).enabled, mutation !== "state");
     }
 });
 
@@ -325,7 +325,7 @@ test("cancel, revoke and expiry stop uncommitted writes while preserving committ
         assert.equal((await done(f.tasks, queued.taskId)).status, "cancelled");
         assert.equal(f.store.listMetadata().length, 2);
         assert.equal(f.accounts.list().items[0].enabled, true);
-        assert.equal(f.accounts.list().items[1].enabled, false);
+        assert.equal(f.accounts.list().items[1].enabled, true);
     }
 });
 
@@ -375,7 +375,7 @@ test("drain timeout never closes an active connection; force is explicit; archiv
     assert.equal(f.accounts.get(row.accountId).enabled, false);
 });
 
-test("failed import can be replaced and manually enabled; manual disable wins replacement verification", async t => {
+test("failed import stays enabled; replacement preserves a later manual disable", async t => {
     let fail = true;
     let hold = false;
     const entered = deferred(),
@@ -393,6 +393,8 @@ test("failed import can be replaced and manually enabled; manual disable wins re
     assert.equal((await done(f.tasks, imported.taskId)).status, "failed");
     const row = f.store.getMetadata(0);
     assert.equal(f.tasks.get(imported.taskId).result.changed, true);
+    assert.equal(f.accounts.get(row.accountId).enabled, true);
+    await f.accounts.patch(row.accountId, { enabled: false }, { keyId: "key-a" });
     fail = false;
     const replaced = f.submit("replace", credentials("alpha"), row.accountId);
     assert.equal((await done(f.tasks, replaced.taskId)).status, "succeeded");
@@ -417,32 +419,51 @@ test("account patch accepts an optional credential and state version pair", asyn
     assert.equal((await done(f.tasks, imported.taskId)).status, "succeeded");
     const accountId = f.store.getMetadata(0).accountId;
     const first = f.accounts.get(accountId);
-    await f.accounts.patch(accountId, {
-        enabled: false,
-        expectedCredentialVersion: first.credentialVersion,
-        expectedStateVersion: first.stateVersion,
-    }, { keyId: "key-a" });
-    assert.equal(f.accounts.get(accountId).enabled, false);
-    await assert.rejects(
-        f.accounts.patch(accountId, {
-            enabled: true,
+    await f.accounts.patch(
+        accountId,
+        {
+            enabled: false,
             expectedCredentialVersion: first.credentialVersion,
             expectedStateVersion: first.stateVersion,
-        }, { keyId: "key-a" }),
+        },
+        { keyId: "key-a" }
+    );
+    assert.equal(f.accounts.get(accountId).enabled, false);
+    await assert.rejects(
+        f.accounts.patch(
+            accountId,
+            {
+                enabled: true,
+                expectedCredentialVersion: first.credentialVersion,
+                expectedStateVersion: first.stateVersion,
+            },
+            { keyId: "key-a" }
+        ),
         { code: "VERSION_CONFLICT" }
     );
     assert.equal(f.accounts.get(accountId).enabled, false);
     const current = f.accounts.get(accountId);
-    await f.accounts.patch(accountId, {
-        enabled: true,
-        expectedCredentialVersion: current.credentialVersion,
-        expectedStateVersion: current.stateVersion,
-    }, { keyId: "key-a" });
+    await f.accounts.patch(
+        accountId,
+        {
+            enabled: true,
+            expectedCredentialVersion: current.credentialVersion,
+            expectedStateVersion: current.stateVersion,
+        },
+        { keyId: "key-a" }
+    );
     assert.equal(f.accounts.get(accountId).enabled, true);
-    await assert.rejects(f.accounts.patch(accountId, {
-        enabled: false,
-        expectedCredentialVersion: current.credentialVersion,
-    }, { keyId: "key-a" }), { code: "INVALID_REQUEST" });
+    await assert.rejects(
+        f.accounts.patch(
+            accountId,
+            {
+                enabled: false,
+                expectedCredentialVersion: current.credentialVersion,
+            },
+            { keyId: "key-a" }
+        ),
+        { code: "INVALID_REQUEST" }
+    );
 });
 
 test("replacement accepts versioned envelope while preserving legacy credential body", async t => {
@@ -452,23 +473,40 @@ test("replacement accepts versioned envelope while preserving legacy credential 
     assert.equal((await done(f.tasks, imported.taskId)).status, "succeeded");
     const accountId = f.store.getMetadata(0).accountId;
     const first = f.accounts.get(accountId);
-    const replaced = f.submit("replace", {
-        credentials: credentials("alpha"),
-        expectedCredentialVersion: first.credentialVersion,
-        expectedStateVersion: first.stateVersion,
-    }, accountId);
+    const replaced = f.submit(
+        "replace",
+        {
+            credentials: credentials("alpha"),
+            expectedCredentialVersion: first.credentialVersion,
+            expectedStateVersion: first.stateVersion,
+        },
+        accountId
+    );
     assert.equal((await done(f.tasks, replaced.taskId)).status, "succeeded");
     const current = f.accounts.get(accountId);
-    const stale = f.submit("replace", {
-        credentials: credentials("alpha"),
-        expectedCredentialVersion: first.credentialVersion,
-        expectedStateVersion: first.stateVersion,
-    }, accountId);
+    const stale = f.submit(
+        "replace",
+        {
+            credentials: credentials("alpha"),
+            expectedCredentialVersion: first.credentialVersion,
+            expectedStateVersion: first.stateVersion,
+        },
+        accountId
+    );
     assert.equal((await done(f.tasks, stale.taskId)).items[0].error.code, "VERSION_CONFLICT");
     assert.equal(f.accounts.get(accountId).credentialVersion, current.credentialVersion);
-    assert.throws(() => f.submit("replace", {
-        credentials: credentials("alpha"), expectedCredentialVersion: current.credentialVersion,
-    }, accountId), { code: "INVALID_REQUEST" });
+    assert.throws(
+        () =>
+            f.submit(
+                "replace",
+                {
+                    credentials: credentials("alpha"),
+                    expectedCredentialVersion: current.credentialVersion,
+                },
+                accountId
+            ),
+        { code: "INVALID_REQUEST" }
+    );
 });
 
 test("successful verification records committed versions rather than later account versions", async t => {
@@ -520,7 +558,7 @@ test("shutdown interrupts active verification without replay and preserves queue
     await f.tasks.close();
     assert.equal(f.tasks.get(running.taskId).status, "interrupted");
     assert.equal(f.tasks.get(queued.taskId).status, "queued");
-    assert.equal(f.store.getMetadata(0).disabled, true);
+    assert.equal(f.accounts.get(f.store.getMetadata(0).accountId).enabled, true);
     assert.deepEqual(fs.readdirSync(path.join(f.rootDir, "data/management/task-inputs")), [`${queued.taskId}.json`]);
 });
 
@@ -668,7 +706,7 @@ if (verifierIntegration >= 0 || fs.existsSync(path.join(__dirname, "../../src/ma
             assert.equal(task.items[1].result.authIndex, 1);
             assert.notEqual(task.items[0].result.requestId, task.items[1].result.requestId);
             assert.equal(task.items[1].result.upstreamStatus, rejectBeta ? 403 : 200);
-            assert.equal(f.accounts.list().items[1].enabled, !rejectBeta);
+            assert.equal(f.accounts.list().items[1].enabled, true);
             assert.equal(records.length, 2);
             assert(records.every(record => record.closed));
             assert.notEqual(records[0].args.endpoint, records[1].args.endpoint);

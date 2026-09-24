@@ -40,14 +40,14 @@
 | GET `/system/readiness`          | system:read                                   | 200  | `{ready,checks}`；未就绪时 `ready:false`                                                                                                                   |
 | GET `/accounts`                  | accounts:read                                 | 200  | Account 分页                                                                                                                                               |
 | GET `/accounts/{id}`             | accounts:read                                 | 200  | Account 元数据                                                                                                                                             |
-| POST `/accounts/import`          | accounts:write + accounts:test                | 202  | `{items:[{clientRef,credentials}],model?}`                                                                                                                 |
+| POST `/accounts/import`          | accounts:write；验证还需 accounts:test        | 202  | `{items:[{clientRef,credentials}],model?,verify?}`；`verify:false` 仅上传并启用                                                                               |
 | POST `/accounts/batch`           | accounts:write；archive 还需 accounts:archive | 202  | `{action,accountIds,force?}`                                                                                                                               |
 | POST `/accounts/{id}/test`       | accounts:test                                 | 202  | `{mode?,model?}`；默认 model                                                                                                                               |
 | POST `/accounts/export`          | accounts:export                               | 200  | `{accountIds}` → `{items:[{accountId,index,credentials}]}`                                                                                                 |
 | POST `/accounts/{id}/archive`    | accounts:archive                              | 202  | 可选 `{force}`                                                                                                                                             |
 | POST `/accounts/{id}/restore`    | accounts:archive                              | 202  | 恢复同一 identity，保持手动禁用                                                                                                                            |
 | POST `/accounts/{id}/reload`     | accounts:write                                | 202  | 可选 `{force}`                                                                                                                                             |
-| PUT `/accounts/{id}/credentials` | accounts:write + accounts:test                | 202  | 旧 body 直接为凭证对象或 JSON 字符串；新客户端可用 `{credentials,expectedCredentialVersion,expectedStateVersion}`，版本须成对，过期返回 `VERSION_CONFLICT` |
+| PUT `/accounts/{id}/credentials` | accounts:write；验证还需 accounts:test        | 202  | 旧 body 直接为凭证对象或 JSON 字符串；新客户端可用 `{credentials,expectedCredentialVersion,expectedStateVersion,verify?}`，版本须成对，过期返回 `VERSION_CONFLICT` |
 | PATCH `/accounts/{id}`           | accounts:write                                | 200  | `{enabled:boolean,force?:boolean,expectedCredentialVersion?:integer,expectedStateVersion?:integer}`；两个版本须同时传入，不匹配返回 409 `VERSION_CONFLICT` |
 | GET `/settings`                  | settings:read                                 | 200  | `{values,persistentKeys}`                                                                                                                                  |
 | PATCH `/settings`                | settings:write                                | 200  | 显式设置 patch → `{values,persisted,applied,applicationError?}`                                                                                            |
@@ -88,9 +88,11 @@ Task 包含 `taskId`、`kind`、`createdByKeyId`、时间戳、`counts`、`items
 }
 ```
 
-此回执仅证明该次凭证提交，不证明模型验证通过或账号已启用。import 在初始禁用凭证写入后即记录回执，因此验证超时、失败、取消或重启中断时，可以同时呈现“已上传 / 验证失败”。replace 先验证候选、后替换凭证，候选失败不会产生本次上传回执，旧凭证仍保留。test 和启停操作不产生上传回执。`counts` 仍统计任务最终结果；调用方统计已上传数量应另计 `items[].upload.status == "committed"`，它可以与验证失败数量重叠。
+此回执仅证明该次凭证提交，不证明模型验证通过或账号已启用。import 在默认启用的新凭证写入后即记录回执并刷新账号池，再独立验证模型；验证超时、失败、取消或重启中断不会撤销已提交的启用状态，可以同时呈现“已上传 / 验证失败 / 已启用”。后续手动或业务停用仍以实际读回状态为准。replace 先验证候选、后替换凭证，候选失败不会产生本次上传回执，旧凭证仍保留。test 和启停操作不产生上传回执。`counts` 仍统计任务最终结果；调用方统计已上传数量应另计 `items[].upload.status == "committed"`，它可以与验证失败数量重叠。
 
-回执固定保存实际提交时的双版本；import 随后启用账号时，`item.result.stateVersion` 可以高于 `item.upload.stateVersion`。后续替换凭证、手动停用或 429 不覆盖旧回执。没有 upload 字段只表示缺少该次提交证据，旧任务同样如此，不能统一解释为从未上传。202/taskId/accountId 均不能单独证明某次新来源版本已提交。调用方把派发时固化的本地来源版本按 origin、taskId、item 序号关联到回执，不能用最新来源版本反推历史提交。
+上传客户端可在 import 或版本化 replace 请求中传 `verify:false`，仅保存凭证并启用，不发起模型验证。replace 的 `verify:false` 必须同时提供 `expectedCredentialVersion` 和 `expectedStateVersion`。该路径只需 `accounts:write`；省略 `verify` 或传 `true` 保持旧行为，并需 `accounts:test`。`verify:false` 成功项的 `item.result` 为 `{success:true,stage:"uploaded",credentialVersion,stateVersion}`；`uploaded` 只证明上传，不能当作 `model_verified`。replace 在凭证与状态的同一事务中启用账号，原本禁用时 `stateVersion` 同时递增；凭证及状态版本 CAS、排空、上传回执和取消恢复仍适用。随后可独立调用只读的 `/accounts/{id}/test` 指定模型；它不会改变启用状态。
+
+回执固定保存实际提交时的双版本；新 import 的启用与初始凭证同时提交，验证成功不额外修改启停状态或递增状态版本；旧版本任务可能有更高的验证结果状态版本。后续替换凭证、手动停用或 429 不覆盖旧回执。没有 upload 字段只表示缺少该次提交证据，旧任务同样如此，不能统一解释为从未上传。202/taskId/accountId 均不能单独证明某次新来源版本已提交。调用方把派发时固化的本地来源版本按 origin、taskId、item 序号关联到回执，不能用最新来源版本反推历史提交。
 
 非秘密回执按 task/item 关联，与凭证一起进入 CredentialStore 的回滚 journal；`tasks.json` 是该证据的独立副本。若进程在凭证提交后、任务回执落盘前退出，启动时会补回真实提交证据，保持任务 interrupted/failed/cancelled 等结果，不重新验证或启用。未完成的凭证 journal 会连同回执一起回滚。恢复不依赖当前账号版本、同邮箱匹配或已清理的任务私有输入。旧任务缺证据时保持缺失。
 
@@ -102,9 +104,9 @@ Task 包含 `taskId`、`kind`、`createdByKeyId`、时间戳、`counts`、`items
 
 本轮没有自动清理 `uploadReceipts`：记录数随已提交的 import/replace 次数线性增长，现有元数据整文件写入和回滚 journal 的体积、写入成本也会随之增加。任务 30 天清理不会删除未补回的提交证据。大量长期写入场景需要后续设计“终态任务已补回且调用方已持久保存”的保留策略后再压缩，不能按当前账号版本或时间直接删掉尚未核对的记录。
 
-导入默认使用 `gemini-3.8-flash` 测试候选凭证后自动启用；重复邮箱报错，不替换已有账户。替换凭证先隔离验证候选，再按读取时的 credentialVersion/stateVersion 校验提交。手动状态更改优先，旧验证快照不得覆盖较新的禁用/过期状态。账户列表、任务、审计和错误不返回 cookie/localStorage/credentialState，只有有 export 权限的导出接口可以返回凭证。
+导入凭证成功落库后默认启用，再使用指定模型（默认 `gemini-3.8-flash`）独立验证；重复邮箱报错，不替换已有账户。替换凭证先隔离验证候选，再按读取时的 credentialVersion/stateVersion 校验提交。手动状态更改优先，旧验证快照不得覆盖较新的禁用/过期状态。账户列表、任务、审计和错误不返回 cookie/localStorage/credentialState，只有有 export 权限的导出接口可以返回凭证。
 
-只有新 import 获得 `model_verified` 结果并通过 credential/state 双版本检查后才自动启用。`test`（connection/model）只读，不改变启用状态；replace 成功保留当前管理标记，不自动启用。显式 PATCH/batch `enabled:true` 是人工管理操作，可以启用 pending 账户，但不能作为模型验证成功的证据。失败导入可先 replace 修复凭证、验证成功后再明确 enable。
+新 import 默认启用不以 `model_verified` 为前置条件；验证失败仅记录失败，验证结束不写启停状态，避免覆盖后来发生的手动或 429 停用。`test`（connection/model）只读，不改变启用状态；replace 成功保留当前管理标记，不自动启用。显式 PATCH/batch `enabled:true` 是人工管理操作，可以启用 pending 账户，但不能作为模型验证成功的证据。历史版本留下的禁用账号仍按实际状态管理，升级不会批量启用已有账号。
 
 验证器默认并发 1、总超时 10 分钟、固定且有界的 OK 提示。`connection` 仅说明连接可用；`model` 必须有目标账户真实模型响应，不能用页面控制台成功信号代替，不能失败后切到别的账户。验证不得使用生产 ConnectionRegistry、改变生产 currentAuthIndex 或占用生产上下文；候选 storage state 只能由调用方在版本校验通过后提交。
 
@@ -239,28 +241,28 @@ W2 还运行真实 `credentialStore`、`runtimeSettingsStore`、`managementKeys`
 
 ## 验收矩阵
 
-| 编号    | 本轮证据/后续条件                                                                            | 当前状态                             |
-| ------- | -------------------------------------------------------------------------------------------- | ------------------------------------ |
-| C01     | 24 个 HTTP 操作、完整路径/方法、局部 refs、逐路由认证和 task 幂等要求                        | 已验证文档                           |
-| C02     | limits、task 状态、uppercase codes、模板排除项、公开 schema 无凭证字段                       | 已验证文档                           |
-| B01     | 真实 AuthSource 从临时文件加载两份不同虚构账户                                               | 已验证基线                           |
-| B02     | 旧 StatusRoutes 保留认证边界调用，返回账户元数据，无 cookie 值                               | 已验证基线；认证本身为 mock          |
-| B03     | 真实 RequestHandler 的 connection 测试分别检查两个目标，不切换当前账户                       | 已验证基线；非模型测试               |
-| B04     | beta 缺失 WebSocket 时失败，alpha 可用也不替代 beta                                          | 已验证基线                           |
-| B05     | 无效/不存在 index 被拒绝，connection 成功保留活跃冷却                                        | 已验证基线                           |
-| B06     | 系统 busy 拒绝变更，禁用持久化并排除轮转、关闭目标连接                                       | 已验证基线                           |
-| B07     | 真实旧设置路由的合法/非法数值和 8 个持久化键                                                 | 已验证基线；不等于新 writer 竞态验证 |
-| B08     | 真实用量服务记录两个账户各自成功/失败，limit 仅截取历史                                      | 已验证基线                           |
-| UI01–03 | 真实 Vue SFC 模板/脚本、一次性 token、撤销、过期、session 降级和异步卸载清理                 | 已通过；非 DOM renderer              |
-| W2-01   | 真实登录来源、Bearer/scope 隔离、撤销、hash 落盘；过期等由 keys 支撑套件覆盖                 | 已通过本地模拟                       |
-| W2-02   | 真实挂载 JSON envelope、requestId、404/405、畸形/编码/点路径、旧接口未知子路径不转发模型     | 已通过本地模拟                       |
-| W2-03   | 两份 import 经真实 task/account/verifier/adapter/client，归属正确后启用；readiness 条件      | 已通过；模拟浏览器/上游              |
-| W2-04   | beta 失败不切换；test 只读；失败导入 pending/disabled，人工启用不冒充验证；隔离/清理支撑套件 | 已通过；模拟浏览器/上游              |
-| W2-05   | 同 key/content 重放、不同 key 隔离；tasks 套件覆盖并发幂等、queued/running 重启和 30 天清理  | 已通过本地模拟                       |
-| W2-06   | 重复邮箱、真实替换验证中手动禁用赢得版本竞态、归档恢复 ID/禁用；store 套件覆盖刷新/删除竞态  | 已通过本地模拟                       |
-| W2-07   | HTTP drain 超时/force；runtime/tasks 套件覆盖取消/撤销、运行归属与已提交不回滚               | 已通过；缩短超时及模拟资源           |
-| W2-08   | 真实设置 HTTP 落盘失败不改内存、applied:false、提交后审计失败；store 套件覆盖共享写入与恢复  | 已通过；模拟 I/O 故障，非实际挂载    |
-| W2-09   | 10MiB/1MiB/100 项、clientRef/model admission 无副作用、分页、显式 export 与响应/日志脱敏     | 已通过本地模拟                       |
-| LIVE-01 | 单独授权的两真实账户 model 模式验证；保存去敏 taskId/requestId/账户归属/上游状态/时间证据    | deferred；用户安排另行测试           |
+| 编号    | 本轮证据/后续条件                                                                               | 当前状态                             |
+| ------- | ----------------------------------------------------------------------------------------------- | ------------------------------------ |
+| C01     | 24 个 HTTP 操作、完整路径/方法、局部 refs、逐路由认证和 task 幂等要求                           | 已验证文档                           |
+| C02     | limits、task 状态、uppercase codes、模板排除项、公开 schema 无凭证字段                          | 已验证文档                           |
+| B01     | 真实 AuthSource 从临时文件加载两份不同虚构账户                                                  | 已验证基线                           |
+| B02     | 旧 StatusRoutes 保留认证边界调用，返回账户元数据，无 cookie 值                                  | 已验证基线；认证本身为 mock          |
+| B03     | 真实 RequestHandler 的 connection 测试分别检查两个目标，不切换当前账户                          | 已验证基线；非模型测试               |
+| B04     | beta 缺失 WebSocket 时失败，alpha 可用也不替代 beta                                             | 已验证基线                           |
+| B05     | 无效/不存在 index 被拒绝，connection 成功保留活跃冷却                                           | 已验证基线                           |
+| B06     | 系统 busy 拒绝变更，禁用持久化并排除轮转、关闭目标连接                                          | 已验证基线                           |
+| B07     | 真实旧设置路由的合法/非法数值和 8 个持久化键                                                    | 已验证基线；不等于新 writer 竞态验证 |
+| B08     | 真实用量服务记录两个账户各自成功/失败，limit 仅截取历史                                         | 已验证基线                           |
+| UI01–03 | 真实 Vue SFC 模板/脚本、一次性 token、撤销、过期、session 降级和异步卸载清理                    | 已通过；非 DOM renderer              |
+| W2-01   | 真实登录来源、Bearer/scope 隔离、撤销、hash 落盘；过期等由 keys 支撑套件覆盖                    | 已通过本地模拟                       |
+| W2-02   | 真实挂载 JSON envelope、requestId、404/405、畸形/编码/点路径、旧接口未知子路径不转发模型        | 已通过本地模拟                       |
+| W2-03   | 两份 import 经真实 task/account/verifier/adapter/client，默认启用并独立验证归属；readiness 条件 | 已通过；模拟浏览器/上游              |
+| W2-04   | beta 失败不切换；test 只读；新导入默认启用，验证失败不撤销上传或启用；隔离/清理支撑套件         | 已通过；模拟浏览器/上游              |
+| W2-05   | 同 key/content 重放、不同 key 隔离；tasks 套件覆盖并发幂等、queued/running 重启和 30 天清理     | 已通过本地模拟                       |
+| W2-06   | 重复邮箱、真实替换验证中手动禁用赢得版本竞态、归档恢复 ID/禁用；store 套件覆盖刷新/删除竞态     | 已通过本地模拟                       |
+| W2-07   | HTTP drain 超时/force；runtime/tasks 套件覆盖取消/撤销、运行归属与已提交不回滚                  | 已通过；缩短超时及模拟资源           |
+| W2-08   | 真实设置 HTTP 落盘失败不改内存、applied:false、提交后审计失败；store 套件覆盖共享写入与恢复     | 已通过；模拟 I/O 故障，非实际挂载    |
+| W2-09   | 10MiB/1MiB/100 项、clientRef/model admission 无副作用、分页、显式 export 与响应/日志脱敏        | 已通过本地模拟                       |
+| LIVE-01 | 单独授权的两真实账户 model 模式验证；保存去敏 taskId/requestId/账户归属/上游状态/时间证据       | deferred；用户安排另行测试           |
 
 LIVE-01 仍需另行安排两真实账户的 model 模式验证及去敏证据；不得用本轮模拟 E2E 或旧连接测试替代。

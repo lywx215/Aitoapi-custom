@@ -9,7 +9,17 @@
  * Logging Service Module
  * Responsible for formatting and recording system logs
  */
+const { randomUUID } = require("crypto");
+const DIAGNOSTIC_KEYS = new Set(
+    "requestId attemptId attemptCount attemptOutcome deliveryOutcome attemptNo authIndex apiFormat mode model stage elapsedMs upstreamStatus wireStatus resultClass errorCode failureOrigin failureStage closeCause headersSent terminalSeen terminalSent eofSeen parserFinishOk observationComplete candidateCount convertedEffectivePartCount upstreamEffectivePartCount ordinaryTextNonWhitespaceChars thoughtChars mediaParts validToolCalls unknownPartCount toolRisk blockReason finishReasonsByCandidate serverDataUtf8Bytes serverWsChunks parserResidualBytes parseErrorCount queuePeakBytes bufferPeakBytes downstreamBodyBytesWritten writeBackpressureCount drainWaitMs firstUpstreamByteMs firstEffectiveMs responseCommitMs totalMs timeoutSource configuredTimeoutMs eligible denyReason attemptsUsed emptyRetriesUsed remainingDeadlineMs ackState ackWaitMs browserReadBytes browserReadChunks browserWsChunks browserDataUtf8Bytes browserProtocolVersion browserDurationMs dispatchState inputFormat eventCount recentEvents seq rawBytes eventKind partKinds errorCount taskId verificationAttemptId deadlineRemainingMs queueWaitMs browserReady wsReady maxOutputTokens thinkingBudget thinkingLevel includeThoughts candidatesTokenCount thoughtsTokenCount".split(
+        " "
+    )
+);
+
 class LoggingService {
+    static bootId = randomUUID();
+    static diagnosticLoggers = new Set();
+    static levelListeners = new Set();
     // Log levels: DEBUG < INFO < WARN < ERROR
     static LEVELS = { DEBUG: 0, ERROR: 3, INFO: 1, WARN: 2 };
     static currentLevel =
@@ -20,9 +30,24 @@ class LoggingService {
      * @param {string} level - 'DEBUG', 'INFO', 'WARN', or 'ERROR'
      */
     static setLevel(level) {
-        const upperLevel = level.toUpperCase();
+        const upperLevel = String(level).toUpperCase();
         if (LoggingService.LEVELS[upperLevel] !== undefined) {
             LoggingService.currentLevel = LoggingService.LEVELS[upperLevel];
+            if (upperLevel !== "DEBUG") {
+                for (const logger of LoggingService.diagnosticLoggers) {
+                    clearImmediate(logger.diagnosticFlush);
+                    logger.diagnosticFlush = null;
+                    logger.diagnosticQueue = null;
+                }
+                LoggingService.diagnosticLoggers.clear();
+            }
+            for (const listener of LoggingService.levelListeners) {
+                try {
+                    listener(upperLevel);
+                } catch {
+                    /* Diagnostics must never affect requests. */
+                }
+            }
         }
     }
 
@@ -42,6 +67,96 @@ class LoggingService {
      */
     static isDebugEnabled() {
         return LoggingService.currentLevel <= LoggingService.LEVELS.DEBUG;
+    }
+
+    static onLevelChange(listener) {
+        LoggingService.levelListeners.add(listener);
+        return () => LoggingService.levelListeners.delete(listener);
+    }
+
+    diagnostic(level, event, fieldsFactory) {
+        if (!LoggingService.isDebugEnabled()) return false;
+        try {
+            const fields = fieldsFactory();
+            const safe = {};
+            for (const [key, value] of Object.entries(fields || {})) {
+                if (!DIAGNOSTIC_KEYS.has(key)) continue;
+                if (
+                    value === null ||
+                    typeof value === "boolean" ||
+                    (typeof value === "number" && Number.isFinite(value))
+                )
+                    safe[key] = value;
+                else if (typeof value === "string")
+                    safe[key] = Array.from(value.slice(0, 160), char => (char.charCodeAt(0) < 32 ? " " : char)).join(
+                        ""
+                    );
+                else if (key === "recentEvents" && Array.isArray(value))
+                    safe[key] = value.slice(-12).map(v => ({
+                        eventKind: ["data", "done", "control"].includes(v.eventKind) ? v.eventKind : "control",
+                        rawBytes: Number(v.rawBytes) || 0,
+                        seq: Number(v.seq) || 0,
+                    }));
+                else if (key === "finishReasonsByCandidate" && value && typeof value === "object") {
+                    safe[key] = Object.fromEntries(
+                        Object.entries(value)
+                            .slice(0, 32)
+                            .filter(([k]) => /^\d+$/.test(k))
+                            .map(([k, v]) => [k, typeof v === "string" && /^[A-Z_]{1,64}$/.test(v) ? v : null])
+                    );
+                }
+            }
+            const record = {
+                ...safe,
+                bootId: LoggingService.bootId,
+                buildCommit: /^[a-f0-9]{7,64}$/i.test(process.env.ZEABUR_GIT_COMMIT_SHA || process.env.GIT_COMMIT || "")
+                    ? process.env.ZEABUR_GIT_COMMIT_SHA || process.env.GIT_COMMIT
+                    : null,
+                event: String(event).slice(0, 96),
+                level,
+                logsDropped: this.diagnosticDropped || 0,
+                schemaVersion: 1,
+                ts: new Date().toISOString(),
+            };
+            const line = JSON.stringify(record);
+            if (Buffer.byteLength(line) > 8192 || !LoggingService.isDebugEnabled()) return false;
+            // One bounded line; no raw model data or error object is ever serialized.
+            this.logBuffer.push(line);
+            if (this.logBuffer.length > this.maxBufferSize) this.logBuffer.shift();
+            this.diagnosticQueue ||= [];
+            const terminal = /\.(attempt_finished|request_finished|browser_closed)$/.test(record.event);
+            if (this.diagnosticQueue.length >= (terminal ? 128 : 96)) {
+                this.diagnosticDropped = (this.diagnosticDropped || 0) + 1;
+                return false;
+            }
+            this.diagnosticQueue.push(line);
+            LoggingService.diagnosticLoggers.add(this);
+            if (!this.diagnosticFlush) this.diagnosticFlush = setImmediate(() => this._flushDiagnostics());
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    _flushDiagnostics() {
+        this.diagnosticFlush = null;
+        if (!LoggingService.isDebugEnabled()) {
+            this.diagnosticQueue = null;
+            LoggingService.diagnosticLoggers.delete(this);
+            return;
+        }
+        for (const line of (this.diagnosticQueue || []).splice(0, 32)) {
+            try {
+                console.debug(line);
+            } catch {
+                this.diagnosticDropped = (this.diagnosticDropped || 0) + 1;
+            }
+        }
+        if (this.diagnosticQueue?.length) this.diagnosticFlush = setImmediate(() => this._flushDiagnostics());
+        else {
+            this.diagnosticQueue = null;
+            LoggingService.diagnosticLoggers.delete(this);
+        }
     }
 
     constructor(serviceName = "ProxyServer") {

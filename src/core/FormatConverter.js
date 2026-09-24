@@ -7,6 +7,7 @@
 
 const axios = require("axios");
 const mime = require("mime-types");
+const GenerationResultGuard = require("./GenerationResultGuard");
 
 /**
  * Format Converter Module
@@ -657,7 +658,6 @@ class FormatConverter {
         this.logger.info("[Adapter] Starting translation of OpenAI request format to Google format...");
 
         // [DEBUG] Log incoming messages for troubleshooting
-        this.logger.debug(`[Adapter] Debug: incoming OpenAI Body = ${JSON.stringify(openaiBody, null, 2)}`);
 
         // Parse model suffixes in reverse stripping order:
         // 1) built-in tool overrides: trailing `-search` / `-code`
@@ -1067,9 +1067,6 @@ class FormatConverter {
 
             if (Object.keys(functionCallingConfig).length > 0) {
                 googleRequest.toolConfig = { functionCallingConfig };
-                this.logger.debug(
-                    `[Adapter] Converted tool_choice to Gemini toolConfig: ${JSON.stringify(functionCallingConfig)}`
-                );
             }
         }
 
@@ -1084,15 +1081,9 @@ class FormatConverter {
 
                 if (schema) {
                     try {
-                        this.logger.debug(`[Adapter] Debug: Converting OpenAI JSON Schema: ${JSON.stringify(schema)}`);
-
                         // Convert schema to Gemini format (reuse shared method)
                         // isResponseSchema = true for Structured Output
                         const convertedSchema = this._convertSchemaToGemini(schema, true);
-
-                        this.logger.debug(
-                            `[Adapter] Debug: Converted Gemini JSON Schema: ${JSON.stringify(convertedSchema)}`
-                        );
 
                         // Set Gemini config for structured output
                         generationConfig.responseMimeType = "application/json";
@@ -1150,9 +1141,6 @@ class FormatConverter {
         const cleanModelName = rawModelName ? rawModelName.replace(/^models\//, "") : null;
         const path = "/v1beta/openai/embeddings";
 
-        this.logger.debug(
-            `[Adapter] Debug: incoming OpenAI Embeddings Body = ${JSON.stringify(googleRequest, null, 2)}`
-        );
         this.logger.debug(`[Adapter] Debug: Final Google OpenAI-compatible Embeddings Path = ${path}`);
         this.logger.debug("[Adapter] OpenAI embeddings to Google OpenAI-compatible translation complete.");
 
@@ -1224,8 +1212,6 @@ class FormatConverter {
 
         // Safety settings
         googleRequest.safetySettings = this.getDefaultSafetySettings();
-
-        this.logger.debug(`[Adapter] Debug: Final Gemini Request = ${JSON.stringify(googleRequest, null, 2)}`);
     }
 
     /**
@@ -1235,8 +1221,6 @@ class FormatConverter {
      * @param {object} streamState - Optional state object to track thought mode
      */
     translateGoogleToOpenAIStream(googleChunk, modelName = "gemini-2.5-flash-lite", streamState = null) {
-        this.logger.debug(`[Adapter] Debug: Received Google chunk for OpenAI: ${googleChunk}`);
-
         // Ensure streamState exists to properly track tool call indices
         if (!streamState) {
             this.logger.warn(
@@ -1244,12 +1228,12 @@ class FormatConverter {
             );
             streamState = {};
         }
-        if (!googleChunk || googleChunk.trim() === "") {
+        if (!googleChunk || (typeof googleChunk === "string" && googleChunk.trim() === "")) {
             return null;
         }
 
         let jsonString = googleChunk;
-        if (jsonString.startsWith("data: ")) {
+        if (typeof jsonString === "string" && jsonString.startsWith("data: ")) {
             jsonString = jsonString.substring(6).trim();
         }
 
@@ -1259,7 +1243,7 @@ class FormatConverter {
 
         let googleResponse;
         try {
-            googleResponse = JSON.parse(jsonString);
+            googleResponse = typeof jsonString === "object" ? jsonString : JSON.parse(jsonString);
         } catch (e) {
             this.logger.warn(`[Adapter] Unable to parse Google JSON chunk for OpenAI: ${jsonString}`);
             return null;
@@ -1323,7 +1307,7 @@ class FormatConverter {
                 } else if (part.functionCall) {
                     // Convert Gemini functionCall to OpenAI tool_calls format
                     const funcCall = part.functionCall;
-                    const toolCallId = `call_${this._generateRequestId()}`;
+                    const toolCallId = funcCall.id || `call_${this._generateRequestId()}`;
 
                     // Track tool call index for multiple function calls
                     const toolCallIndex = streamState.toolCallIndex ?? 0;
@@ -1379,7 +1363,7 @@ class FormatConverter {
         if (candidate.finishReason) {
             // Determine the correct finish_reason for OpenAI format
             let finishReason;
-            if (streamState.hasFunctionCall) {
+            if (streamState.hasFunctionCall && candidate.finishReason === "STOP") {
                 finishReason = "tool_calls";
             } else {
                 finishReason = this._mapFinishReason(candidate.finishReason);
@@ -1417,15 +1401,13 @@ class FormatConverter {
      * @returns {string|null} - SSE formatted events for Response API
      */
     translateGoogleToResponseAPIStream(googleChunk, modelName = "gemini-2.5-flash-lite", streamState = null) {
-        this.logger.debug(`[Adapter] Debug: Received Google chunk for Response API: ${googleChunk}`);
-
         // Ensure streamState exists
         if (!streamState) {
             this.logger.warn("[Adapter] streamState not provided, creating default state.");
             streamState = {};
         }
 
-        if (!googleChunk || googleChunk.trim() === "") {
+        if (!googleChunk || (typeof googleChunk === "string" && googleChunk.trim() === "")) {
             return null;
         }
 
@@ -1785,7 +1767,7 @@ class FormatConverter {
                     } else if (part?.functionCall) {
                         const funcCall = part.functionCall;
                         const itemId = `fc_${this._generateRequestId()}`;
-                        const callId = `call_${this._generateRequestId()}`;
+                        const callId = funcCall.id || `call_${this._generateRequestId()}`;
                         const outputIndex = streamState.nextOutputIndex++;
                         const args = JSON.stringify(funcCall.args || {});
 
@@ -1856,12 +1838,18 @@ class FormatConverter {
                 const completedAt = Math.floor(Date.now() / 1000);
                 const finalOutput = (streamState.outputItemsByIndex || []).filter(Boolean);
 
-                pushEvent("response.completed", {
+                const incomplete =
+                    streamState.generationResult?.resultClass !== undefined &&
+                    streamState.generationResult.resultClass !== "success";
+                const reason =
+                    streamState.generationResult?.resultClass === "blocked" ? "content_filter" : "max_output_tokens";
+                pushEvent(incomplete ? "response.incomplete" : "response.completed", {
                     response: buildResponseObject({
                         completed_at: completedAt,
                         output: finalOutput,
-                        status: "completed",
+                        status: incomplete ? "incomplete" : "completed",
                         usage: responseUsage,
+                        ...(incomplete ? { incomplete_details: { reason } } : {}),
                     }),
                 });
 
@@ -1869,7 +1857,11 @@ class FormatConverter {
             }
         };
 
-        // Google streaming might concatenate multiple SSE frames; handle them safely.
+        if (googleChunk && typeof googleChunk === "object") {
+            handleGoogleResponseObject(googleChunk);
+            return eventsToSend.length > 0 ? eventsToSend.join("") : null;
+        }
+        // Legacy callers pass complete frames. GenerationPipeline passes parsed objects.
         const frames = String(googleChunk)
             .split(/\n\n+/)
             .map(s => s.trim())
@@ -1900,18 +1892,6 @@ class FormatConverter {
      * Convert Google non-stream response to OpenAI format
      */
     convertGoogleToOpenAINonStream(googleResponse, modelName = "gemini-2.5-flash-lite") {
-        try {
-            this.logger.debug(
-                `[Adapter] Debug: Received Google response for OpenAI non-stream: ${JSON.stringify(googleResponse)}`
-            );
-        } catch (e) {
-            this.logger.debug(
-                `[Adapter] Debug: Received Google response for OpenAI non-stream (non-serializable): ${String(
-                    googleResponse
-                )}`
-            );
-        }
-
         const candidate = googleResponse.candidates?.[0];
 
         if (!candidate) {
@@ -1952,7 +1932,7 @@ class FormatConverter {
                 } else if (part.functionCall) {
                     // Convert Gemini functionCall to OpenAI tool_calls format
                     const funcCall = part.functionCall;
-                    const toolCallId = `call_${this._generateRequestId()}`;
+                    const toolCallId = funcCall.id || `call_${this._generateRequestId()}`;
 
                     const toolCallObj = {
                         function: {
@@ -1979,7 +1959,7 @@ class FormatConverter {
 
         // Determine finish_reason
         let finishReason;
-        if (tool_calls.length > 0) {
+        if (tool_calls.length > 0 && candidate.finishReason === "STOP") {
             finishReason = "tool_calls";
         } else {
             finishReason = this._mapFinishReason(candidate.finishReason);
@@ -2008,18 +1988,6 @@ class FormatConverter {
      * @returns {object} - OpenAI Response API format response
      */
     convertGoogleToResponseAPINonStream(googleResponse, modelName = "gemini-2.5-flash-lite", responseDefaults = {}) {
-        try {
-            this.logger.debug(
-                `[Adapter] Debug: Received Google response for Response API non-stream: ${JSON.stringify(googleResponse)}`
-            );
-        } catch (e) {
-            this.logger.debug(
-                `[Adapter] Debug: Received Google response for Response API non-stream (non-serializable): ${String(
-                    googleResponse
-                )}`
-            );
-        }
-
         const candidate = googleResponse.candidates?.[0];
 
         if (!candidate) {
@@ -2091,7 +2059,7 @@ class FormatConverter {
                 } else if (part.functionCall) {
                     // Function call
                     const funcCall = part.functionCall;
-                    const callId = `call_${this._generateRequestId()}`;
+                    const callId = funcCall.id || `call_${this._generateRequestId()}`;
                     output.push({
                         arguments: JSON.stringify(funcCall.args || {}),
                         call_id: callId,
@@ -2194,14 +2162,13 @@ class FormatConverter {
      * @returns {string} - OpenAI finish reason
      */
     _mapFinishReason(geminiReason) {
+        if (GenerationResultGuard.BLOCKED.has(String(geminiReason).toUpperCase())) return "content_filter";
         const reasonMap = {
             max_tokens: "length",
-            other: "stop",
-            recitation: "stop",
             safety: "content_filter",
             stop: "stop",
         };
-        return reasonMap[(geminiReason || "stop").toLowerCase()] || "stop";
+        return reasonMap[(geminiReason || "stop").toLowerCase()] || "error";
     }
 
     _generateRequestId() {
@@ -2258,7 +2225,6 @@ class FormatConverter {
         this.logger.info("[Adapter] Starting translation of Claude request format to Google format...");
 
         // [DEBUG] Log incoming messages
-        this.logger.debug(`[Adapter] Debug: incoming Claude Body = ${JSON.stringify(claudeBody, null, 2)}`);
 
         // Parse model suffixes in reverse stripping order:
         // 1) built-in tool overrides: trailing `-search` / `-code`
@@ -2622,12 +2588,9 @@ class FormatConverter {
                 }
 
                 if (schema) {
-                    this.logger.debug(`[Adapter] Debug: Converting Claude JSON Schema: ${JSON.stringify(schema)}`);
                     generationConfig.responseMimeType = "application/json";
                     generationConfig.responseSchema = this._convertSchemaToGemini(schema, true);
-                    this.logger.debug(
-                        `[Adapter] Debug: Converted Gemini JSON Schema: ${JSON.stringify(generationConfig.responseSchema)}`
-                    );
+
                     this.logger.info(
                         `[Adapter] Converted Claude output_format to Gemini responseSchema. Name: ${schemaName}`
                     );
@@ -2644,12 +2607,9 @@ class FormatConverter {
         if (claudeBody.output_config && claudeBody.output_config.format) {
             const format = claudeBody.output_config.format;
             if (format.type === "json_schema" && format.schema) {
-                this.logger.debug(`[Adapter] Debug: Converting Claude JSON Schema: ${JSON.stringify(format.schema)}`);
                 generationConfig.responseMimeType = "application/json";
                 generationConfig.responseSchema = this._convertSchemaToGemini(format.schema, true);
-                this.logger.debug(
-                    `[Adapter] Debug: Converted Gemini JSON Schema: ${JSON.stringify(generationConfig.responseSchema)}`
-                );
+
                 this.logger.info(
                     `[Adapter] Converted Claude output_config to Gemini responseSchema. Title: ${format.schema.title || "untitled"}`
                 );
@@ -2803,20 +2763,18 @@ class FormatConverter {
      * @param {object} streamState - State object to track streaming progress
      */
     translateGoogleToClaudeStream(googleChunk, modelName = "gemini-2.5-flash-lite", streamState = null) {
-        this.logger.debug(`[Adapter] Debug: Received Google chunk for Claude: ${googleChunk}`);
-
         if (!streamState) {
             this.logger.warn(
                 "[Adapter] streamState not provided, creating default state. This may cause issues with tool call tracking."
             );
             streamState = {};
         }
-        if (!googleChunk || googleChunk.trim() === "") {
+        if (!googleChunk || (typeof googleChunk === "string" && googleChunk.trim() === "")) {
             return null;
         }
 
         let jsonString = googleChunk;
-        if (jsonString.startsWith("data: ")) {
+        if (typeof jsonString === "string" && jsonString.startsWith("data: ")) {
             jsonString = jsonString.substring(6).trim();
         }
         if (jsonString === "[DONE]") {
@@ -2825,7 +2783,7 @@ class FormatConverter {
 
         let googleResponse;
         try {
-            googleResponse = JSON.parse(jsonString);
+            googleResponse = typeof jsonString === "object" ? jsonString : JSON.parse(jsonString);
         } catch (e) {
             this.logger.warn(`[Adapter] Unable to parse Google JSON chunk for Claude: ${jsonString}`);
             return null;
@@ -2960,7 +2918,7 @@ class FormatConverter {
                     this.logger.info("[Adapter] Successfully parsed image from streaming response chunk.");
                 } else if (part.functionCall) {
                     // Tool use
-                    const toolUseId = `toolu_${this._generateRequestId()}`;
+                    const toolUseId = part.functionCall.id || `toolu_${this._generateRequestId()}`;
                     events.push({
                         content_block: {
                             id: toolUseId,
@@ -2986,6 +2944,13 @@ class FormatConverter {
                     streamState.contentBlockIndex++;
                     streamState.hasToolUse = true;
                 }
+                if (part.thoughtSignature && streamState.thinkingBlockStarted && !streamState.thinkingBlockStopped) {
+                    events.push({
+                        delta: { signature: part.thoughtSignature, type: "signature_delta" },
+                        index: streamState.thinkingBlockIndex,
+                        type: "content_block_delta",
+                    });
+                }
             }
         }
 
@@ -3009,7 +2974,9 @@ class FormatConverter {
 
             // Determine stop reason
             let stopReason = "end_turn";
-            if (streamState.hasToolUse) {
+            if (GenerationResultGuard.BLOCKED.has(candidate.finishReason)) {
+                stopReason = "refusal";
+            } else if (streamState.hasToolUse && candidate.finishReason === "STOP") {
                 stopReason = "tool_use";
             } else if (candidate.finishReason === "MAX_TOKENS") {
                 stopReason = "max_tokens";
@@ -3040,18 +3007,6 @@ class FormatConverter {
      * Convert Google non-stream response to Claude format
      */
     convertGoogleToClaudeNonStream(googleResponse, modelName = "gemini-2.5-flash-lite") {
-        try {
-            this.logger.debug(
-                `[Adapter] Debug: Received Google response for Claude non-stream: ${JSON.stringify(googleResponse)}`
-            );
-        } catch (e) {
-            this.logger.debug(
-                `[Adapter] Debug: Received Google response for Claude non-stream (non-serializable): ${String(
-                    googleResponse
-                )}`
-            );
-        }
-
         const candidate = googleResponse.candidates?.[0];
         const usage = googleResponse.usageMetadata || {};
 
@@ -3100,7 +3055,7 @@ class FormatConverter {
                 } else if (part.functionCall) {
                     hasToolUse = true;
                     content.push({
-                        id: `toolu_${this._generateRequestId()}`,
+                        id: part.functionCall.id || `toolu_${this._generateRequestId()}`,
                         input: part.functionCall.args || {},
                         name: part.functionCall.name,
                         type: "tool_use",
@@ -3111,7 +3066,9 @@ class FormatConverter {
 
         // Determine stop reason
         let stopReason = "end_turn";
-        if (hasToolUse) {
+        if (GenerationResultGuard.BLOCKED.has(candidate.finishReason)) {
+            stopReason = "refusal";
+        } else if (hasToolUse && candidate.finishReason === "STOP") {
             stopReason = "tool_use";
         } else if (candidate.finishReason === "MAX_TOKENS") {
             stopReason = "max_tokens";
@@ -3146,10 +3103,6 @@ class FormatConverter {
      */
     async translateOpenAIResponseToGoogle(responseBody) {
         this.logger.info("[Adapter] Starting translation of OpenAI Response API request format to Google format...");
-
-        this.logger.debug(
-            `[Adapter] Debug: incoming OpenAI Response API Body = ${JSON.stringify(responseBody, null, 2)}`
-        );
 
         // Parse model suffixes in reverse stripping order:
         // 1) built-in tool overrides: trailing `-search` / `-code`
@@ -3588,10 +3541,6 @@ class FormatConverter {
                     this.logger.debug(
                         `[Adapter] tool_choice forces unsupported hosted tool (${toolChoice}); ignoring.`
                     );
-                } else {
-                    this.logger.debug(
-                        `[Adapter] Unsupported tool_choice for Responses API, ignoring: ${JSON.stringify(toolChoice)}`
-                    );
                 }
             } else if (typeof toolChoice === "object") {
                 if (toolChoice.type === "allowed_tools") {
@@ -3637,18 +3586,11 @@ class FormatConverter {
                     this.logger.debug(
                         `[Adapter] tool_choice forces unsupported hosted tool (${toolChoice.type}); ignoring.`
                     );
-                } else {
-                    this.logger.debug(
-                        `[Adapter] Unsupported tool_choice for Responses API, ignoring: ${JSON.stringify(toolChoice)}`
-                    );
                 }
             }
 
             if (Object.keys(functionCallingConfig).length > 0) {
                 googleRequest.toolConfig = { functionCallingConfig };
-                this.logger.debug(
-                    `[Adapter] Converted tool_choice to Gemini toolConfig: ${JSON.stringify(functionCallingConfig)}`
-                );
             }
         }
 

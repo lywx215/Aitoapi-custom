@@ -156,6 +156,7 @@ class ModelProbeTransport {
             this.onMessage = raw => {
                 try {
                     const packet = JSON.parse(raw.toString());
+                    if (packet.event_type === "generation_capabilities" && packet.protocol_version === 2) return;
                     if (
                         packet.request_id !== requestId ||
                         packet.request_attempt_id !== attemptId ||
@@ -164,6 +165,7 @@ class ModelProbeTransport {
                     ) {
                         throw new VerificationError("protocol_mismatch");
                     }
+                    if (packet.event_type === "attempt_closed" && packet.protocol_version === 2) return;
                     if (packet.event_type === "error") throw upstreamError(packet.status, packet.message);
                     if (packet.event_type === "response_headers") {
                         if (status !== null || !Number.isInteger(packet.status)) {

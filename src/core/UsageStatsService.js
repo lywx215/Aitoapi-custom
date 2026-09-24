@@ -110,7 +110,7 @@ class UsageStatsService {
         }
     }
 
-    recordAttempt(requestId, authIndex, accountName = undefined) {
+    recordAttempt(requestId, authIndex, accountName = undefined, attemptId = null) {
         if (!this.enabled) return;
         const tracker = this.activeRequests.get(requestId);
         if (!tracker) return;
@@ -123,7 +123,7 @@ class UsageStatsService {
                 ? this._normalizeAccountName(accountName)
                 : this._resolveAccountName(normalizedAuthIndex);
 
-        this._pushAttempt(tracker, normalizedAuthIndex, resolvedAccountName);
+        this._pushAttempt(tracker, normalizedAuthIndex, resolvedAccountName, attemptId);
     }
 
     recordAttemptResult(requestId, authIndex, result = {}) {
@@ -133,10 +133,12 @@ class UsageStatsService {
         const normalizedAuthIndex = this._normalizeAuthIndex(authIndex);
         for (let index = tracker.attempts.length - 1; index >= 0; index -= 1) {
             const attempt = tracker.attempts[index];
+            if (result.attemptId && attempt.attemptId !== result.attemptId) continue;
             const parsed = this._parseAccountKey(attempt.accountKey);
             if (attempt.outcome || (normalizedAuthIndex !== null && parsed.authIndex !== normalizedAuthIndex)) continue;
             attempt.errorMessage = result.errorMessage || result.message || null;
             attempt.outcome = this._normalizeOutcome(result.outcome);
+            Object.assign(attempt, this._generationFields(result));
             attempt.statusCode = Number.isFinite(Number(result.statusCode ?? result.status))
                 ? Number(result.statusCode ?? result.status)
                 : null;
@@ -179,14 +181,19 @@ class UsageStatsService {
         const accountKey = this._buildAccountKey(finalAuthIndex, finalAccountName);
 
         const record = {
+            ...this._generationFields(result),
             accountKey,
             apiFormat: tracker.apiFormat,
             attemptCount: tracker.attemptCount,
             attempts: tracker.attempts.map(item => ({
+                ...this._generationFields(item),
                 accountKey: item.accountKey,
                 errorMessage: item.errorMessage || null,
                 outcome: item.outcome || null,
-                statusCode: Number.isFinite(Number(item.statusCode)) ? Number(item.statusCode) : null,
+                statusCode:
+                    item.statusCode != null && Number.isFinite(Number(item.statusCode))
+                        ? Number(item.statusCode)
+                        : null,
             })),
             clientIp: tracker.clientIp,
             durationMs,
@@ -321,6 +328,7 @@ class UsageStatsService {
             records: this.records.slice().reverse(),
             startedAt: this.startedAt,
             summary: {
+                ...this._classifiedCounts(this.summary),
                 abortedCount: this.summary.abortedCount,
                 activeRequests: this.activeRequests.size,
                 avgDurationMs,
@@ -604,18 +612,27 @@ class UsageStatsService {
         }
     }
 
-    _pushAttempt(tracker, authIndex, accountName) {
+    _pushAttempt(tracker, authIndex, accountName, attemptId = null) {
         const normalizedAccountName = this._normalizeAccountName(accountName);
         const accountKey = this._buildAccountKey(authIndex, normalizedAccountName);
 
         tracker.attemptCount += 1;
-        tracker.attempts.push({ accountKey, errorMessage: null, outcome: null, statusCode: null });
+        tracker.attempts.push({ accountKey, attemptId, errorMessage: null, outcome: null, statusCode: null });
     }
 
     _updateSummary(record) {
         const durationMs = this._normalizeDurationMs(record.durationMs);
         this.summary.totalRequests += 1;
         this.summary.totalDurationMs += durationMs;
+        const classifiedKey = {
+            aborted: "classifiedAbortedCount",
+            blocked: "blockedCount",
+            empty: "emptyCount",
+            error: "classifiedErrorCount",
+            incomplete: "incompleteCount",
+            success: "classifiedSuccessCount",
+        }[record.resultClass];
+        if (classifiedKey) this.summary[classifiedKey] = (this.summary[classifiedKey] || 0) + 1;
 
         if (record.outcome === "success") {
             this.summary.successCount += 1;
@@ -689,9 +706,41 @@ class UsageStatsService {
     _normalizeLoadedRecord(record) {
         return {
             ...record,
+            ...this._generationFields(record),
             durationMs: this._normalizeDurationMs(record?.durationMs),
             outcome: this._normalizeOutcome(record?.outcome),
-            statusCode: Number.isFinite(Number(record?.statusCode)) ? Number(record.statusCode) : null,
+            statusCode:
+                record?.statusCode != null && Number.isFinite(Number(record.statusCode))
+                    ? Number(record.statusCode)
+                    : null,
+        };
+    }
+
+    _classifiedCounts(summary) {
+        return Object.fromEntries(
+            [
+                "classifiedSuccessCount",
+                "blockedCount",
+                "emptyCount",
+                "incompleteCount",
+                "classifiedErrorCount",
+                "classifiedAbortedCount",
+            ].map(key => [key, summary[key] || 0])
+        );
+    }
+
+    _generationFields(result) {
+        if (!["success", "blocked", "empty", "incomplete", "error", "aborted"].includes(result.resultClass)) return {};
+        const status = value => (Number.isInteger(value) && value >= 100 && value <= 599 ? value : null);
+        return {
+            attemptId: typeof result.attemptId === "string" ? result.attemptId.slice(0, 160) : null,
+            attemptOutcome: result.attemptOutcome || null,
+            deliveryOutcome: result.deliveryOutcome || null,
+            errorCode: typeof result.errorCode === "string" ? result.errorCode.slice(0, 96) : null,
+            resultClass: result.resultClass,
+            schemaVersion: 2,
+            upstreamStatus: status(result.upstreamStatus),
+            wireStatus: status(result.wireStatus),
         };
     }
 
@@ -749,8 +798,14 @@ class UsageStatsService {
                 abortedCount: 0,
                 activeRequests: 0,
                 avgDurationMs: 0,
+                blockedCount: 0,
+                classifiedAbortedCount: 0,
+                classifiedErrorCount: 0,
+                classifiedSuccessCount: 0,
+                emptyCount: 0,
                 errorCount: 0,
                 formatBreakdown: [],
+                incompleteCount: 0,
                 requestCategoryBreakdown: [],
                 successCount: 0,
                 successRate: 0,

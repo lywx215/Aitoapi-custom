@@ -434,6 +434,20 @@ class ManagementTaskService {
     }
     _verification(value) {
         // Callers validate attribution; no credentialState or arbitrary error strings leave this boundary.
+        if (
+            value.stage === "uploaded" &&
+            value.success === true &&
+            Number.isSafeInteger(value.credentialVersion) &&
+            value.credentialVersion > 0 &&
+            Number.isSafeInteger(value.stateVersion) &&
+            value.stateVersion > 0
+        )
+            return {
+                credentialVersion: value.credentialVersion,
+                stage: "uploaded",
+                stateVersion: value.stateVersion,
+                success: true,
+            };
         return {
             authIndex: value.authIndex,
             ...(value.success === true &&

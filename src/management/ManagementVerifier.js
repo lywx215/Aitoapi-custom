@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const VerifierTransport = require("./VerifierTransport");
 const VerifierBrowserAdapter = require("./VerifierBrowserAdapter");
 const { VerificationError, abortable, abortError, delay } = require("./VerifierSupport");
+const LoggingService = require("../utils/LoggingService");
 
 const MAX_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -9,6 +10,7 @@ class ManagementVerifier {
     constructor(serverSystem) {
         const config = serverSystem?.config || {};
         const options = serverSystem?.managementVerifierOptions || {};
+        this.logger = serverSystem?.logger;
         const staticConfig = {
             aiStudioAppUrl: config.aiStudioAppUrl,
             browserExecutablePath: config.browserExecutablePath,
@@ -27,6 +29,25 @@ class ManagementVerifier {
     async verify({ index, credentials, mode = "model", model = "gemini-3.8-flash", signal, onProgress } = {}) {
         const requestId = `verify_${crypto.randomUUID()}`;
         const attribution = { authIndex: index, model, requestId };
+        const started = LoggingService.isDebugEnabled() ? Date.now() : null;
+        let diagnosticActive = started !== null;
+        const unsubscribe = diagnosticActive
+            ? LoggingService.onLevelChange(level => {
+                  if (level !== "DEBUG") diagnosticActive = false;
+              })
+            : null;
+        const diagnostic = (stage, extra = {}) => {
+            if (diagnosticActive && LoggingService.isDebugEnabled())
+                this.logger?.diagnostic?.("INFO", "verification.stage", () => ({
+                    ...attribution,
+                    deadlineRemainingMs: Math.max(0, this.timeoutMs - (Date.now() - started)),
+                    elapsedMs: Date.now() - started,
+                    stage,
+                    verificationAttemptId: requestId,
+                    ...extra,
+                }));
+        };
+        diagnostic("queued");
         let candidate;
         try {
             if (this.closed) throw new VerificationError("closed");
@@ -48,6 +69,7 @@ class ManagementVerifier {
             )
                 throw new VerificationError("invalid_input");
         } catch (error) {
+            unsubscribe?.();
             throw Object.assign(
                 error instanceof VerificationError ? error : new VerificationError("invalid_input"),
                 attribution
@@ -62,8 +84,10 @@ class ManagementVerifier {
         this.jobs.add(job);
         const run = this.tail.then(async () => {
             if (controller.signal.aborted) throw abortError(controller.signal);
+            diagnostic("dequeued", { queueWaitMs: started === null ? undefined : Date.now() - started });
             return this.execute({
                 credentials: candidate,
+                diagnostic,
                 index,
                 mode,
                 model,
@@ -78,20 +102,25 @@ class ManagementVerifier {
         try {
             return await abortable(run, controller.signal);
         } catch (error) {
+            diagnostic("failed", { errorCode: error.code || error.stage || "verification_failed" });
             throw Object.assign(
                 error instanceof VerificationError ? error : new VerificationError("initialization_failed"),
                 attribution
             );
         } finally {
+            diagnostic("finished");
+            diagnosticActive = false;
+            unsubscribe?.();
             clearTimeout(timer);
             signal?.removeEventListener("abort", cancel);
         }
     }
 
-    async execute({ index, credentials, mode, model, requestId, signal, onProgress }) {
+    async execute({ index, credentials, mode, model, requestId, signal, onProgress, diagnostic = () => {} }) {
         let adapter;
         const transport = new VerifierTransport({ index, model, requestId });
         const progress = async (stage, value) => {
+            diagnostic(stage);
             if (onProgress) {
                 // Observers cannot replace a verification result or leak their own exceptions.
                 await abortable(
@@ -122,16 +151,24 @@ class ManagementVerifier {
         try {
             await progress("initializing", 10);
             const endpoint = await transport.listen(signal);
+            diagnostic("transport_listening");
             adapter = this.adapterFactory();
             await abortable(adapter.start({ credentials, endpoint, index, signal }), signal);
+            diagnostic("browser_ready", { browserReady: true });
             await progress("checking_session", 25);
             let connected = false;
             transport.connected.then(() => {
                 connected = true;
             });
             let identity;
+            let lastReadiness;
             while (!signal.aborted) {
                 identity = checkIdentity(await abortable(adapter.inspect(), signal));
+                const readiness = `${Boolean(identity)}:${connected}`;
+                if (readiness !== lastReadiness) {
+                    diagnostic(identity ? "identity_confirmed" : "identity_pending", { wsReady: connected });
+                    lastReadiness = readiness;
+                }
                 if (connected) {
                     if (!identity) throw new VerificationError("identity_unconfirmed");
                     if (transport.socket?.readyState !== 1) throw new VerificationError("connection_closed");

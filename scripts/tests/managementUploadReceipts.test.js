@@ -107,6 +107,110 @@ const imported = (env, name = "alpha") =>
     });
 const operation = (taskId, kind) => ({ itemIndex: 0, kind, taskId });
 
+test("upload-only import commits enabled credentials without invoking verifier; test stays read-only", async t => {
+    const env = fixture(t);
+    const { taskId } = env.submit("import", {
+        items: [{ clientRef: "alpha", credentials: credentials("alpha") }],
+        verify: false,
+    });
+    env.tasks.start();
+    const task = await finished(env.tasks, taskId);
+    const item = task.items[0];
+    assert.equal(task.status, "succeeded");
+    assert.equal(env.calls, 0);
+    assert.equal(item.upload.status, "committed");
+    assert.deepEqual(item.result, {
+        credentialVersion: item.upload.credentialVersion,
+        stage: "uploaded",
+        stateVersion: item.upload.stateVersion,
+        success: true,
+    });
+    assert.equal(env.accounts.get(item.accountId).enabled, true);
+    const tested = await finished(env.tasks, env.submit("test", {}, item.accountId).taskId);
+    assert.equal(env.calls, 1);
+    assert.equal(tested.items[0].result.stage, "model_verified");
+    assert.equal(tested.items[0].upload, undefined);
+    assert.equal(env.accounts.get(item.accountId).stateVersion, item.upload.stateVersion);
+});
+
+test("upload-only replace atomically enables a disabled account and keeps receipt and CAS", async t => {
+    const env = fixture(t);
+    const row = await env.store.create(credentials("alpha"), { disabled: true });
+    assert.throws(() => env.submit("replace", { credentials: credentials("beta"), verify: false }, row.accountId), {
+        code: "INVALID_REQUEST",
+    });
+    assert.equal(env.tasks.list().total, 0);
+    const conflict = env.submit(
+        "replace",
+        {
+            credentials: credentials("beta"),
+            expectedCredentialVersion: row.credentialVersion,
+            expectedStateVersion: row.stateVersion + 1,
+            verify: false,
+        },
+        row.accountId
+    );
+    env.tasks.start();
+    const failed = await finished(env.tasks, conflict.taskId);
+    assert.equal(failed.items[0].error.code, "VERSION_CONFLICT");
+    assert.equal(failed.items[0].upload, undefined);
+    assert.equal(env.calls, 0);
+    assert.equal(env.store.read(row.index).accountName, "alpha@example.invalid");
+    const accepted = env.submit(
+        "replace",
+        {
+            credentials: credentials("beta"),
+            expectedCredentialVersion: row.credentialVersion,
+            expectedStateVersion: row.stateVersion,
+            verify: false,
+        },
+        row.accountId
+    );
+    const task = await finished(env.tasks, accepted.taskId);
+    const item = task.items[0];
+    assert.equal(task.status, "succeeded");
+    assert.equal(env.calls, 0);
+    assert.equal(item.upload.credentialVersion, row.credentialVersion + 1);
+    assert.equal(item.upload.stateVersion, row.stateVersion + 1);
+    assert.deepEqual(item.result, {
+        credentialVersion: item.upload.credentialVersion,
+        stage: "uploaded",
+        stateVersion: item.upload.stateVersion,
+        success: true,
+    });
+    assert.equal(env.accounts.get(row.accountId).enabled, true);
+    assert.equal(env.store.read(row.index).accountName, "beta@example.invalid");
+    assert.deepEqual(env.store.getUploadReceipt(operation(accepted.taskId, "replace")), item.upload);
+});
+
+test("queued pre-upgrade payloads without verify still run the legacy verifier path after restart", async t => {
+    const env = fixture(t);
+    const existing = await env.store.create(credentials("alpha"), { disabled: true });
+    const importedTask = env.submit("import", {
+        items: [{ clientRef: "beta", credentials: credentials("beta") }],
+    });
+    const replacedTask = env.submit("replace", credentials("gamma"), existing.accountId);
+    for (const taskId of [importedTask.taskId, replacedTask.taskId]) {
+        const inputPath = env.tasks._inputPath(taskId);
+        const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+        delete input.payload.verify;
+        fs.writeFileSync(inputPath, JSON.stringify(input));
+    }
+    await env.tasks.close();
+    env.mount();
+    env.tasks.start();
+    const importedResult = await finished(env.tasks, importedTask.taskId);
+    const replacedResult = await finished(env.tasks, replacedTask.taskId);
+    assert.equal(importedResult.status, "succeeded");
+    assert.equal(replacedResult.status, "succeeded");
+    assert.equal(importedResult.items[0].result.stage, "model_verified");
+    assert.equal(replacedResult.items[0].result.stage, "model_verified");
+    assert.equal(env.calls, 2);
+    assert.equal(env.accounts.get(importedResult.items[0].accountId).enabled, true);
+    assert.equal(env.accounts.get(existing.accountId).enabled, false);
+    assert.equal(env.store.read(existing.index).accountName, "gamma@example.invalid");
+});
+
 test("import publishes its committed upload while verification is running and preserves it on timeout", async t => {
     const entered = deferred(),
         release = deferred();
@@ -124,11 +228,12 @@ test("import publishes its committed upload while verification is running and pr
     assert.equal(pending.upload.status, "committed");
     assert.equal(pending.upload.credentialVersion, 1);
     assert.equal(pending.upload.stateVersion, 1);
-    assert.equal(env.accounts.get(pending.accountId).enabled, false);
+    assert.equal(env.accounts.get(pending.accountId).enabled, true);
     release.resolve();
     const task = await finished(env.tasks, taskId);
     assert.equal(task.status, "failed");
     assert.equal(task.items[0].error.code, "VERIFICATION_TIMEOUT");
+    assert.equal(env.accounts.get(pending.accountId).enabled, true);
     assert.equal(task.items[0].result.success, false);
     assert.deepEqual(task.items[0].upload, pending.upload);
     assert.equal(task.result.changed, true);
@@ -137,7 +242,7 @@ test("import publishes its committed upload while verification is running and pr
     assert(!/SECRET|cookies|origins|credentialHash|operationId/.test(JSON.stringify(task)));
 });
 
-test("cancelled import retains the committed upload and never enables the account", async t => {
+test("cancelled import retains the committed upload and its enabled state", async t => {
     const entered = deferred();
     const env = fixture(
         t,
@@ -157,7 +262,7 @@ test("cancelled import retains the committed upload and never enables the accoun
     const task = await finished(env.tasks, taskId);
     assert.equal(task.status, "cancelled");
     assert.deepEqual(task.items[0].upload, receipt);
-    assert.equal(env.accounts.get(receipt.accountId).enabled, false);
+    assert.equal(env.accounts.get(receipt.accountId).enabled, true);
 });
 
 test("replace failure has no new receipt; successful replacement records only its own committed version", async t => {
@@ -194,7 +299,7 @@ test("upload, verification and subsequent quota disable have independent immutab
     const task = await finished(env.tasks, taskId);
     const item = task.items[0];
     assert.equal(item.upload.stateVersion, 1);
-    assert.equal(item.result.stateVersion, 2);
+    assert.equal(item.result.stateVersion, 1);
     assert.equal(item.result.success, true);
     await env.store.updateState(item.index, { disabled: true, disabledReason: "quota_exhausted", disabledStatus: 429 });
     assert.deepEqual(env.tasks.get(taskId).items[0], item);
@@ -366,5 +471,25 @@ test("a failure immediately after committed create is still reported with upload
     assert.equal(task.items[0].upload.status, "committed");
     assert.equal(task.result.changed, true);
     assert.equal(env.calls, 0);
-    assert.equal(env.accounts.get(task.items[0].accountId).enabled, false);
+    assert.equal(env.accounts.get(task.items[0].accountId).enabled, true);
+});
+
+test("quota disable during import verification is not undone by a successful model response", async t => {
+    const env = fixture(t, async input => {
+        assert.equal(env.accounts.get(env.store.getMetadata(input.index).accountId).enabled, true);
+        await env.store.updateState(input.index, {
+            disabled: true,
+            disabledReason: "quota_exhausted",
+            disabledStatus: 429,
+        });
+        return success(input);
+    });
+    const { taskId } = imported(env);
+    env.tasks.start();
+    const task = await finished(env.tasks, taskId);
+    const item = task.items[0];
+    assert.equal(item.upload.status, "committed");
+    assert.equal(item.error.code, "VERSION_CONFLICT");
+    assert.equal(env.accounts.get(item.accountId).enabled, false);
+    assert.equal(env.accounts.get(item.accountId).disabledStatus, 429);
 });

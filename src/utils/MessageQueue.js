@@ -42,15 +42,31 @@ class MessageQueue extends EventEmitter {
         this.defaultTimeout = timeoutMs;
         this.closed = false;
         this.closeReason = null;
+        this.bytes = 0;
+        this.peakBytes = 0;
+        this.lastActivityAt = Date.now();
+        this.budget = null;
     }
 
     enqueue(message) {
         if (this.closed) return;
+        this.lastActivityAt = Date.now();
+        const bytes = this._messageBytes(message);
+        try {
+            this.budget?.set("queue", this.bytes + bytes);
+        } catch {
+            this.close("resource_exhausted");
+            this.emit("overflow");
+            return false;
+        }
+        this.bytes += bytes;
+        this.peakBytes = Math.max(this.peakBytes, this.bytes);
         if (this.waitingResolvers.length > 0) {
             const resolver = this.waitingResolvers.shift();
             // Check if resolver is still valid (not timed out)
             if (resolver && resolver.timeoutId) {
                 clearTimeout(resolver.timeoutId);
+                this._consume(message);
                 resolver.resolve(message);
             } else {
                 // Resolver already timed out, push message to queue instead
@@ -59,9 +75,29 @@ class MessageQueue extends EventEmitter {
         } else {
             this.messages.push(message);
         }
+        return true;
     }
 
-    async dequeue(timeoutMs = this.defaultTimeout) {
+    _consume(message) {
+        this.bytes -= this._messageBytes(message);
+        this.budget?.set("queue", this.bytes);
+    }
+
+    _messageBytes(message) {
+        return (
+            256 +
+            (typeof message.data === "string" ? message.data.length * 2 : 0) +
+            (typeof message.message === "string" ? message.message.length * 2 : 0)
+        );
+    }
+
+    configureBudget(budget) {
+        this.budget = budget;
+        budget.set("queue", this.bytes);
+    }
+
+    async dequeue(timeoutMs = this.defaultTimeout, signal = null) {
+        if (signal?.aborted) throw signal.reason;
         if (this.closed) {
             const reason = this.closeReason || "unknown";
             throw new QueueClosedError(`Queue is closed (reason: ${reason})`, reason);
@@ -69,13 +105,33 @@ class MessageQueue extends EventEmitter {
         return new Promise((resolve, reject) => {
             // Check if there are already queued messages
             if (this.messages.length > 0) {
-                resolve(this.messages.shift());
+                const message = this.messages.shift();
+                this._consume(message);
+                resolve(message);
                 return;
             }
 
             // Create resolver with timeout BEFORE pushing to waitingResolvers
             // This prevents race condition where enqueue() sees timeoutId=null
-            const resolver = { reject, resolve, timeoutId: null };
+            const cleanup = () => signal?.removeEventListener("abort", abort);
+            const resolver = {
+                reject: error => {
+                    cleanup();
+                    reject(error);
+                },
+                resolve: value => {
+                    cleanup();
+                    resolve(value);
+                },
+                timeoutId: null,
+            };
+            const abort = () => {
+                clearTimeout(resolver.timeoutId);
+                const index = this.waitingResolvers.indexOf(resolver);
+                if (index >= 0) this.waitingResolvers.splice(index, 1);
+                resolver.reject(signal.reason);
+            };
+            signal?.addEventListener("abort", abort, { once: true });
 
             // Set timeout first to ensure resolver is fully initialized
             resolver.timeoutId = setTimeout(() => {
@@ -85,7 +141,7 @@ class MessageQueue extends EventEmitter {
                 }
                 // Clear timeoutId to mark resolver as invalid
                 resolver.timeoutId = null;
-                reject(new QueueTimeoutError());
+                resolver.reject(new QueueTimeoutError());
             }, timeoutMs);
 
             // Now push to waitingResolvers - resolver is fully initialized
@@ -98,7 +154,9 @@ class MessageQueue extends EventEmitter {
                 // We're still the first waiter, consume the message
                 this.waitingResolvers.shift();
                 clearTimeout(resolver.timeoutId);
-                resolve(this.messages.shift());
+                const message = this.messages.shift();
+                this._consume(message);
+                resolver.resolve(message);
             }
         });
     }
@@ -112,6 +170,8 @@ class MessageQueue extends EventEmitter {
         });
         this.waitingResolvers = [];
         this.messages = [];
+        this.bytes = 0;
+        this.budget?.release("queue");
     }
 }
 

@@ -340,7 +340,7 @@
                 "type": "object"
             },
             "CredentialReplaceInput": {
-                "description": "Legacy raw storageState remains accepted. Versioned clients wrap it and supply both expected versions.",
+                "description": "Legacy raw storageState remains accepted and verifies by default. Versioned clients wrap it and supply both expected versions; verify:false saves credentials and enables without model verification.",
                 "oneOf": [
                     { "$ref": "#/components/schemas/CredentialInput" },
                     {
@@ -350,7 +350,8 @@
                         "properties": {
                             "credentials": { "$ref": "#/components/schemas/CredentialInput" },
                             "expectedCredentialVersion": { "type": "integer", "minimum": 1 },
-                            "expectedStateVersion": { "type": "integer", "minimum": 1 }
+                            "expectedStateVersion": { "type": "integer", "minimum": 1 },
+                            "verify": { "type": "boolean", "default": true }
                         }
                     }
                 ]
@@ -619,7 +620,7 @@
             },
             "ImportRequest": {
                 "additionalProperties": false,
-                "description": "Verify each isolated candidate with a real model result, then commit/enable if versions still match. Reject duplicate email; do not replace. clientRef must be nonempty, at most 128 characters and unique within this batch. Validate clientRef and model before admission; return HTTP 400 and do not enqueue on invalid input.",
+                "description": "Commit each new account enabled by default. verify:false skips model verification; omitted or true verifies independently after commit. Reject duplicate email; do not replace. clientRef must be nonempty, at most 128 characters and unique within this batch. Validate clientRef and model before admission; return HTTP 400 and do not enqueue on invalid input.",
                 "properties": {
                     "items": {
                         "items": {
@@ -651,6 +652,10 @@
                         "minLength": 1,
                         "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$",
                         "type": "string"
+                    },
+                    "verify": {
+                        "default": true,
+                        "type": "boolean"
                     }
                 },
                 "required": ["items"],
@@ -1403,7 +1408,10 @@
                         "type": "integer"
                     },
                     "result": {
-                        "$ref": "#/components/schemas/VerificationResult"
+                        "oneOf": [
+                            { "$ref": "#/components/schemas/VerificationResult" },
+                            { "$ref": "#/components/schemas/UploadOnlyResult" }
+                        ]
                     },
                     "stage": {
                         "type": "string"
@@ -1579,7 +1587,7 @@
             },
             "UploadReceipt": {
                 "additionalProperties": false,
-                "description": "Immutable evidence that this task item committed credentials. Independent of verification and enabled state; survives failed, cancelled or interrupted tasks. Import records the initial disabled credential write; replace records only the actual replacement after candidate verification. Absence means no receipt evidence, including legacy tasks, not proof that no upload occurred. Versions are captured at that write, never filled from a later account read.",
+                "description": "Immutable evidence that this task item committed credentials. Independent of verification and enabled state; survives failed, cancelled or interrupted tasks. Import records the initial enabled credential write; replace records only the actual replacement after candidate verification. Absence means no receipt evidence, including legacy tasks, not proof that no upload occurred. Versions are captured at that write, never filled from a later account read.",
                 "properties": {
                     "accountId": { "type": "string", "minLength": 1 },
                     "committedAt": { "type": "string", "format": "date-time" },
@@ -1593,7 +1601,7 @@
             },
             "VerificationResult": {
                 "additionalProperties": false,
-                "description": "Public verification result. Successful import/replace/test items may include the credential/state versions verified at commit or readback. These fields are optional for failed and legacy tasks. Internal credentialState must never be serialized here. Connection mode is not proof of a model result.",
+                "description": "Public verification result. Successful verified import/replace/test items may include credential/state versions. Internal credentialState must never be serialized here. Connection mode is not proof of a model result.",
                 "properties": {
                     "authIndex": {
                         "minimum": 0,
@@ -1627,6 +1635,18 @@
                     }
                 },
                 "required": ["success", "authIndex", "model", "requestId", "upstreamStatus", "stage"],
+                "type": "object"
+            },
+            "UploadOnlyResult": {
+                "additionalProperties": false,
+                "description": "Successful verify:false import or replace. Uploaded is not model verification evidence.",
+                "properties": {
+                    "credentialVersion": { "type": "integer", "minimum": 1 },
+                    "stage": { "type": "string", "enum": ["uploaded"] },
+                    "stateVersion": { "type": "integer", "minimum": 1 },
+                    "success": { "type": "boolean", "enum": [true] }
+                },
+                "required": ["success", "stage", "credentialVersion", "stateVersion"],
                 "type": "object"
             }
         },
@@ -1916,7 +1936,7 @@
         },
         "/api/manage/v1/accounts/{id}/credentials": {
             "put": {
-                "description": "Verify an isolated candidate and replace only credentials. A versioned envelope rejects stale remote snapshots; legacy raw storageState remains compatible. Preserve newer manual flags. Do not expose candidate state in task/audit.",
+                "description": "Default: verify an isolated candidate, then replace credentials while preserving management flags. Versioned verify:false skips verification and atomically replaces credentials and enables the account. A versioned envelope rejects stale remote snapshots; legacy raw storageState remains compatible. Do not expose credential state in task/audit.",
                 "operationId": "replaceAccountCredentials",
                 "parameters": [
                     {
@@ -1983,7 +2003,8 @@
                 ],
                 "summary": "replaceAccountCredentials",
                 "tags": ["accounts"],
-                "x-required-scopes": ["accounts:write", "accounts:test"],
+                "x-required-scopes": ["accounts:write"],
+                "x-conditional-scope": "accounts:test is additionally required unless verify is false",
                 "x-response-mode": "task"
             }
         },
@@ -2338,7 +2359,7 @@
         },
         "/api/manage/v1/accounts/import": {
             "post": {
-                "description": "Verify then commit and autoenable. Each clientRef is carried to its task item. Duplicate emails fail explicitly.",
+                "description": "Commit new credentials enabled by default and refresh the account pool. verify:false stops after upload; omitted or true verifies independently. Verification failure, timeout or cancellation does not disable the committed account; later manual/quota state changes remain authoritative. Each clientRef is carried to its task item. Duplicate emails fail explicitly.",
                 "operationId": "importAccounts",
                 "parameters": [
                     {
@@ -2402,7 +2423,8 @@
                 ],
                 "summary": "importAccounts",
                 "tags": ["accounts"],
-                "x-required-scopes": ["accounts:write", "accounts:test"],
+                "x-required-scopes": ["accounts:write"],
+                "x-conditional-scope": "accounts:test is additionally required unless verify is false",
                 "x-response-mode": "task"
             }
         },

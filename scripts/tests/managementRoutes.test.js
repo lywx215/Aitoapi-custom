@@ -42,7 +42,7 @@ async function fixture(t) {
     keys.isActive = () => active;
     const store = new CredentialStore({ rootDir });
     const row = await store.create(credentials("alpha"));
-    const calls = { balance: 0, model: 0, reload: 0 };
+    const calls = { balance: 0, model: 0, reload: 0, verify: 0 };
     const system = {
         authSource: {
             reloadAuthSources() {
@@ -90,14 +90,17 @@ async function fixture(t) {
         keyStore: keys,
         taskService: tasks,
         verifier: {
-            verify: async input => ({
-                authIndex: input.index,
-                model: input.model,
-                requestId: "verified",
-                stage: input.mode === "connection" ? "connection_ready" : "model_verified",
-                success: true,
-                upstreamStatus: 200,
-            }),
+            verify: async input => {
+                calls.verify++;
+                return {
+                    authIndex: input.index,
+                    model: input.model,
+                    requestId: "verified",
+                    stage: input.mode === "connection" ? "connection_ready" : "model_verified",
+                    success: true,
+                    upstreamStatus: 200,
+                };
+            },
         },
     });
     const app = express();
@@ -191,6 +194,27 @@ test("Bearer-only auth rejects session/model keys; per-operation scopes enforce 
     }
     assert.equal(operations, 21);
     assert.equal(f.calls.model, 0);
+});
+
+test("upload-only routes require write scope; verification routes still require test scope", async t => {
+    const f = await fixture(t);
+    f.setScopes(["accounts:write", "tasks:read"]);
+    const body = { items: [{ clientRef: "upload-only", credentials: credentials("beta") }], verify: false };
+    assert.equal((await f.request("POST", "/accounts/import", { ...body, verify: true })).status, 403);
+    const accepted = await f.request("POST", "/accounts/import", body, { "Idempotency-Key": "upload-only-route" });
+    assert.equal(accepted.status, 202, accepted.text);
+    f.tasks.start();
+    const deadline = Date.now() + 3000;
+    let task = { status: "queued" };
+    while (["queued", "running"].includes(task.status)) {
+        task = (await f.request("GET", `/tasks/${accepted.json.data.taskId}`)).json.data;
+        if (Date.now() > deadline) throw new Error("Upload-only task did not finish");
+        if (["queued", "running"].includes(task.status)) await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(task.status, "succeeded");
+    assert.equal(task.items[0].result.stage, "uploaded");
+    assert.equal(f.calls.verify, 0);
+    assert.equal((await f.request("POST", `/accounts/${task.items[0].accountId}/test`, {})).status, 403);
 });
 
 test("terminal path/method boundaries, server request IDs, bounded JSON parser, and unaffected legacy mount", async t => {
@@ -542,7 +566,8 @@ test("committed import recovers upload evidence when its store response is lost"
     assert.equal(task.items[0].status, "failed");
     assert.equal(task.result.changed, true);
     assert.equal(f.store.listMetadata().length, 2);
-    assert.equal(f.store.listMetadata()[1].disabled, true);
+    const account = await f.request("GET", `/accounts/${task.items[0].accountId}`);
+    assert.equal(account.json.data.enabled, true);
 });
 
 test("P1 completed verification versions become stale after a later account state change", async t => {

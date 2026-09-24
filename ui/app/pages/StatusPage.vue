@@ -2343,10 +2343,16 @@
                                                 :title="canShowErrorDetail(record) ? t('clickToViewError') : ''"
                                                 @click="showErrorDetail(record)"
                                             >
-                                                {{ translateLabel(record.outcome) }}
+                                                {{ resultLabel(record) }}
                                             </span>
                                         </td>
-                                        <td>{{ record.statusCode ?? "-" }}</td>
+                                        <td :title="record.errorCode || ''">
+                                            {{
+                                                record.schemaVersion >= 2
+                                                    ? (record.wireStatus ?? "-")
+                                                    : (record.statusCode ?? "-")
+                                            }}
+                                        </td>
                                         <td>{{ formatDuration(record.durationMs) }}</td>
                                         <td>{{ formatAccount(record.finalAuthIndex, record.finalAccountName) }}</td>
                                         <td class="attempts-cell">
@@ -3190,6 +3196,10 @@ const showErrorDetail = record => {
 const canShowErrorDetail = record =>
     !!record && (record.outcome === "error" || record.outcome === "aborted") && !!record.errorMessage;
 
+const resultLabel = record =>
+    ({ blocked: t("resultBlocked"), empty: t("resultEmpty"), incomplete: t("resultIncomplete") })[record.resultClass] ||
+    translateLabel(record.resultClass || record.outcome);
+
 const showAttemptsDetail = record => {
     if (!record || !record.attempts || record.attempts.length === 0) return;
     const rows = record.attempts.map((item, index) => {
@@ -3210,6 +3220,11 @@ const showAttemptsDetail = record => {
                     String(index + 1)
                 ),
                 h("span", { style: "color: #606266;" }, `#${authIndex} ${accountName}`),
+                h(
+                    "span",
+                    {},
+                    `${resultLabel(item)} · ${item.errorCode || item.upstreamStatus || item.statusCode || "-"}`
+                ),
             ]
         );
     });

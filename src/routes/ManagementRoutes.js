@@ -68,7 +68,9 @@ class ManagementRoutes {
                 asyncHandler(async (req, res) => {
                     // Express implicitly dispatches HEAD through GET; the contract does not.
                     if (req.method !== method.toUpperCase()) throw failure("METHOD_NOT_ALLOWED");
-                    if (!scopes.every(scope => req.managementKey.scopes.includes(scope))) throw failure("FORBIDDEN");
+                    const requiredScopes = typeof scopes === "function" ? scopes(req) : scopes;
+                    if (!requiredScopes.every(scope => req.managementKey.scopes.includes(scope)))
+                        throw failure("FORBIDDEN");
                     if (!this.keys.isActive(req.managementKey.id)) throw failure("UNAUTHORIZED");
                     const data = await handler(req);
                     res.status(status).json({ data, requestId: req.managementRequestId });
@@ -116,8 +118,15 @@ class ManagementRoutes {
             return result;
         };
         const task = (kind, scopes) => req =>
-            this.accounts.submit(kind, req.body ?? {}, req.params.id, actor(req, scopes));
+            this.accounts.submit(
+                kind,
+                req.body ?? {},
+                req.params.id,
+                actor(req, typeof scopes === "function" ? scopes(req) : scopes)
+            );
         const taskRoute = (method, path, scopes, kind) => route(method, path, scopes, task(kind, scopes), 202);
+        const uploadScopes = req =>
+            req.body?.verify === false ? ["accounts:write"] : ["accounts:write", "accounts:test"];
 
         route("get", "/system/status", ["system:read"], () => this.accounts.status());
         route("get", "/system/readiness", ["system:read"], () => this.accounts.readiness());
@@ -125,7 +134,7 @@ class ManagementRoutes {
         route("post", "/accounts/export", ["accounts:export"], req =>
             mutate(req, "export", () => this.accounts.export(req.body))
         );
-        taskRoute("post", "/accounts/import", ["accounts:write", "accounts:test"], "import");
+        taskRoute("post", "/accounts/import", uploadScopes, "import");
         route(
             "post",
             "/accounts/batch",
@@ -145,7 +154,7 @@ class ManagementRoutes {
             mutate(req, "patch-account", () => this.accounts.patch(req.params.id, req.body, actor(req)))
         );
         taskRoute("post", "/accounts/:id/test", ["accounts:test"], "test");
-        taskRoute("put", "/accounts/:id/credentials", ["accounts:write", "accounts:test"], "replace");
+        taskRoute("put", "/accounts/:id/credentials", uploadScopes, "replace");
         taskRoute("post", "/accounts/:id/archive", ["accounts:archive"], "archive");
         taskRoute("post", "/accounts/:id/restore", ["accounts:archive"], "restore");
         taskRoute("post", "/accounts/:id/reload", ["accounts:write"], "reload");

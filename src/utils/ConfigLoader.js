@@ -65,6 +65,10 @@ class ConfigLoader {
             forceThinking: false,
             forceUrlContext: false,
             forceWebSearch: false,
+            generationBufferBytes: 64 * 1024 * 1024,
+            generationEmptyRetries: 1,
+            generationGlobalBufferBytes: 256 * 1024 * 1024,
+            generationPreoutputTimeoutMs: 300000,
             host: "0.0.0.0",
             httpPort: 7860,
             immediateSwitchStatusCodes: [429, 503],
@@ -79,6 +83,17 @@ class ConfigLoader {
         };
 
         // Environment variable overrides
+        for (const [name, key, min, max] of [
+            ["GENERATION_BUFFER_BYTES", "generationBufferBytes", 1024, 256 * 1024 * 1024],
+            ["GENERATION_GLOBAL_BUFFER_BYTES", "generationGlobalBufferBytes", 1024, 1024 * 1024 * 1024],
+            ["GENERATION_EMPTY_RETRIES", "generationEmptyRetries", 0, 1],
+            ["GENERATION_PREOUTPUT_TIMEOUT_MS", "generationPreoutputTimeoutMs", 1, 300000],
+        ]) {
+            if (process.env[name] !== undefined) {
+                const value = Number(process.env[name]);
+                if (Number.isInteger(value)) config[key] = Math.max(min, Math.min(max, value));
+            }
+        }
         if (process.env.AI_STUDIO_APP_URL) {
             const aiStudioAppUrl = parseAiStudioAppUrl(process.env.AI_STUDIO_APP_URL);
             if (aiStudioAppUrl) {

@@ -293,10 +293,10 @@ function registerLocalAcceptance(test) {
                     );
                     assert.equal(failedImport.status, "failed");
                     const pending = await account(failedImport.items[0].accountId);
-                    assert.equal(pending.enabled, false);
-                    assert.equal(pending.disabledReason, "pending_verification");
+                    assert.equal(pending.enabled, true);
+                    assert.equal(pending.disabledReason, null);
                     assert.equal(failedImport.items[0].result.stage, "identity_mismatch");
-                    // Explicit human enable is permitted but is not verification evidence.
+                    // Enabled state is not verification evidence.
                     assert.equal(
                         (await call("PATCH", `/accounts/${pending.accountId}`, { enabled: true })).body.data.enabled,
                         true
