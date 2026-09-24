@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { createHash, randomUUID } = require("crypto");
 const { failure, safeError, clone, canonical, atomicWrite, page } = require("./ManagementSupport");
+const { invalidReceipt, publicReceipt } = require("../storage/UploadReceipt");
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const TERMINAL = new Set(["succeeded", "partial", "failed", "cancelled", "interrupted"]);
@@ -62,6 +63,53 @@ class ManagementTaskService {
     register(kind, handler) {
         if (this.started || this.handlers.has(kind)) throw failure("INVALID_STATE");
         this.handlers.set(kind, handler);
+    }
+    attachUploadStore(store) {
+        if (this.started || this.uploadStore || typeof store?.getUploadReceipt !== "function")
+            throw failure("INVALID_STATE");
+        this.uploadStore = store;
+        // Credential journal recovery precedes this attachment. Task construction may already
+        // have discarded interrupted private inputs; the durable task/item identity is sufficient.
+        let changed = false;
+        for (const task of this.state.tasks) {
+            let recovered = false;
+            for (let index = 0; index < task.items.length; index++) {
+                recovered = this._recoverUpload(task, index) || recovered;
+            }
+            if (recovered) {
+                // Never replay credentials/model calls if a stale task snapshot still says queued.
+                if (task.status === "queued") this._stop(task, "interrupted");
+                task.result = {
+                    ...task.result,
+                    accountIds: [...new Set(task.items.filter(item => item.accountId).map(item => item.accountId))],
+                    changed: true,
+                };
+                changed = true;
+            }
+        }
+        if (changed) this._persist();
+    }
+    _recoverUpload(task, index, required = false) {
+        if (!["import", "replace"].includes(task.kind) || !this.uploadStore) {
+            if (required) throw failure("INVALID_STATE");
+            return false;
+        }
+        const value = this.uploadStore.getUploadReceipt({ itemIndex: index, kind: task.kind, taskId: task.taskId });
+        if (!value) {
+            if (required) throw invalidReceipt();
+            return false;
+        }
+        const receipt = publicReceipt(value);
+        const item = task.items[index];
+        if (
+            (item.accountId !== undefined && item.accountId !== receipt.accountId) ||
+            (item.index !== undefined && item.index !== receipt.index) ||
+            (item.upload && canonical(publicReceipt(item.upload)) !== canonical(receipt))
+        )
+            throw invalidReceipt();
+        Object.assign(item, { accountId: receipt.accountId, index: receipt.index, upload: receipt });
+        task.result.changed = true;
+        return true;
     }
     start() {
         if (this.closing) throw failure("INVALID_STATE");
@@ -305,6 +353,13 @@ class ManagementTaskService {
                                 this._touch(task);
                             },
                             signal: controller.signal,
+                            uploaded: () => {
+                                // Record a completed write even if cancellation arrived during that write.
+                                // This is independent of committed(), which marks the entire item successful.
+                                this._recoverUpload(task, index, true);
+                                this._touch(task);
+                            },
+                            uploadOperation: { itemIndex: index, kind: task.kind, taskId: task.taskId },
                             verification: result => {
                                 item.result = this._verification(result);
                                 this._touch(task);
@@ -316,6 +371,9 @@ class ManagementTaskService {
                             context.committed();
                         }
                     } catch (error) {
+                        // Also handle a failure between the store commit and the normal upload callback.
+                        // Read immutable commit evidence, never the account's current versions.
+                        this._recoverUpload(task, index);
                         // A committed item survives cancellation and later application failure.
                         if (item.status !== "succeeded") {
                             const safe = safeError(error);

@@ -1410,6 +1410,9 @@
                     },
                     "status": {
                         "$ref": "#/components/schemas/TaskState"
+                    },
+                    "upload": {
+                        "$ref": "#/components/schemas/UploadReceipt"
                     }
                 },
                 "required": ["status", "progress", "stage"],
@@ -1572,6 +1575,20 @@
                     "startedAt",
                     "finishedAt"
                 ],
+                "type": "object"
+            },
+            "UploadReceipt": {
+                "additionalProperties": false,
+                "description": "Immutable evidence that this task item committed credentials. Independent of verification and enabled state; survives failed, cancelled or interrupted tasks. Import records the initial disabled credential write; replace records only the actual replacement after candidate verification. Absence means no receipt evidence, including legacy tasks, not proof that no upload occurred. Versions are captured at that write, never filled from a later account read.",
+                "properties": {
+                    "accountId": { "type": "string", "minLength": 1 },
+                    "committedAt": { "type": "string", "format": "date-time" },
+                    "credentialVersion": { "type": "integer", "minimum": 1 },
+                    "index": { "type": "integer", "minimum": 0 },
+                    "stateVersion": { "type": "integer", "minimum": 1 },
+                    "status": { "type": "string", "enum": ["committed"] }
+                },
+                "required": ["status", "accountId", "index", "credentialVersion", "stateVersion", "committedAt"],
                 "type": "object"
             },
             "VerificationResult": {

@@ -33,6 +33,7 @@ class ManagementAccountService {
         this.verifier = verifier;
         this.keyStore = keyStore;
         this.queues = new Map();
+        taskService.attachUploadStore(this.store);
         for (const kind of ["import", "batch", "test", "replace", "archive", "restore", "reload", "reload-auth"])
             taskService.register(kind, (payload, context) => this._execute(kind, payload, context));
     }
@@ -147,14 +148,25 @@ class ManagementAccountService {
                 object(body, ["credentials", "expectedCredentialVersion", "expectedStateVersion"], ["credentials"]);
                 const hasCredential = body.expectedCredentialVersion !== undefined;
                 const hasState = body.expectedStateVersion !== undefined;
-                if (hasCredential !== hasState || (hasCredential && (
-                    !Number.isSafeInteger(body.expectedCredentialVersion) || body.expectedCredentialVersion < 1 ||
-                    !Number.isSafeInteger(body.expectedStateVersion) || body.expectedStateVersion < 1
-                ))) throw failure("INVALID_REQUEST");
+                if (
+                    hasCredential !== hasState ||
+                    (hasCredential &&
+                        (!Number.isSafeInteger(body.expectedCredentialVersion) ||
+                            body.expectedCredentialVersion < 1 ||
+                            !Number.isSafeInteger(body.expectedStateVersion) ||
+                            body.expectedStateVersion < 1))
+                )
+                    throw failure("INVALID_REQUEST");
                 return {
-                    credentials: ManagementAccountService.credentials(body.credentials), id, model: MODEL,
-                    ...(hasCredential ? { expectedCredentialVersion: body.expectedCredentialVersion,
-                        expectedStateVersion: body.expectedStateVersion } : {}),
+                    credentials: ManagementAccountService.credentials(body.credentials),
+                    id,
+                    model: MODEL,
+                    ...(hasCredential
+                        ? {
+                              expectedCredentialVersion: body.expectedCredentialVersion,
+                              expectedStateVersion: body.expectedStateVersion,
+                          }
+                        : {}),
                 };
             }
             return { credentials: ManagementAccountService.credentials(body), id, model: MODEL };
@@ -260,20 +272,28 @@ class ManagementAccountService {
             this._find(id);
             if (body.enabled) {
                 // Explicit operator enable is distinct from automatic verification evidence.
-                await this.store.updateState(row.index, {
-                    disabled: null,
-                    disabledAt: null,
-                    disabledReason: null,
-                    disabledStatus: null,
-                    expired: null,
-                }, expectedVersions);
+                await this.store.updateState(
+                    row.index,
+                    {
+                        disabled: null,
+                        disabledAt: null,
+                        disabledReason: null,
+                        disabledStatus: null,
+                        expired: null,
+                    },
+                    expectedVersions
+                );
             } else {
                 this._runtime();
-                await this.store.updateState(row.index, {
-                    disabled: true,
-                    disabledAt: new Date().toISOString(),
-                    disabledReason: "manual",
-                }, expectedVersions);
+                await this.store.updateState(
+                    row.index,
+                    {
+                        disabled: true,
+                        disabledAt: new Date().toISOString(),
+                        disabledReason: "manual",
+                    },
+                    expectedVersions
+                );
                 this.system.authSource.reloadAuthSources();
                 await this._drain(row.index, force, { check: () => this._checkActor(actor) }, async runtime =>
                     runtime.closeAccount(row.index, { force })
@@ -376,9 +396,9 @@ class ManagementAccountService {
                     const row = await this.store.create(source.credentials, {
                         disabled: true,
                         reason: "pending_verification",
+                        uploadOperation: item.uploadOperation,
                     });
-                    item.identify(row);
-                    item.mutated();
+                    item.uploaded();
                     this.system.authSource.reloadAuthSources();
                     const result = await this._verify(row, source.credentials, "model", payload.model, item);
                     await this._serialized(row.index, async () => {
@@ -428,10 +448,12 @@ class ManagementAccountService {
                 const current = this._assertVersion(row);
                 item.committed(this._verifiedResult(row, result, current));
             } else if (kind === "replace") {
-                if (payload.expectedCredentialVersion !== undefined && (
-                    row.credentialVersion !== payload.expectedCredentialVersion ||
-                    row.stateVersion !== payload.expectedStateVersion
-                )) throw failure("VERSION_CONFLICT");
+                if (
+                    payload.expectedCredentialVersion !== undefined &&
+                    (row.credentialVersion !== payload.expectedCredentialVersion ||
+                        row.stateVersion !== payload.expectedStateVersion)
+                )
+                    throw failure("VERSION_CONFLICT");
                 this._duplicates([{ credentials: payload.credentials }], row.accountId);
                 const result = await this._verify(row, payload.credentials, "model", payload.model, item);
                 await this._serialized(row.index, async () => {
@@ -443,8 +465,11 @@ class ManagementAccountService {
                         // Close only after drain. Failed candidate verification never touches production.
                         await runtime.closeAccount(row.index, { force: false });
                         item.check();
-                        const committed = await this.store.replace(row.index, payload.credentials, versions(row));
-                        item.mutated();
+                        const committed = await this.store.replace(row.index, payload.credentials, {
+                            ...versions(row),
+                            uploadOperation: item.uploadOperation,
+                        });
+                        item.uploaded();
                         item.committed(this._verifiedResult(row, result, committed));
                         this.system.authSource.reloadAuthSources();
                     });

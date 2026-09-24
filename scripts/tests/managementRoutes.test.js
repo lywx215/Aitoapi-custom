@@ -513,7 +513,7 @@ test("P1 disable conflict is pre-write, while ACCOUNT_BUSY and audit failure can
     assert.equal((await f.request("GET", url)).json.data.enabled, false);
 });
 
-test("P1 terminal import item without accountId does not prove account creation was absent", async t => {
+test("committed import recovers upload evidence when its store response is lost", async t => {
     const f = await fixture(t);
     const create = f.store.create.bind(f.store);
     f.store.create = async (...args) => {
@@ -534,9 +534,13 @@ test("P1 terminal import item without accountId does not prove account creation 
     const task = (await f.request("GET", `/tasks/${accepted.json.data.taskId}`)).json.data;
     assert.equal(task.status, "failed");
     assert.equal(task.items[0].clientRef, "post-commit");
-    assert.equal(task.items[0].accountId, undefined);
+    assert.equal(task.items[0].accountId, f.store.listMetadata()[1].accountId);
+    assert.equal(task.items[0].upload.status, "committed");
+    assert.equal(task.items[0].upload.accountId, task.items[0].accountId);
+    assert.equal(task.items[0].upload.credentialVersion, 1);
+    assert.equal(task.items[0].upload.stateVersion, 1);
     assert.equal(task.items[0].status, "failed");
-    assert.equal(task.result.changed, false);
+    assert.equal(task.result.changed, true);
     assert.equal(f.store.listMetadata().length, 2);
     assert.equal(f.store.listMetadata()[1].disabled, true);
 });

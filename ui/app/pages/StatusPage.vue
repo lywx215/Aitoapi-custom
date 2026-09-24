@@ -33,6 +33,29 @@
                 </button>
                 <button
                     class="menu-item"
+                    :class="{ active: activeTab === 'accounts' }"
+                    :title="t('accountManagement')"
+                    :aria-label="t('accountManagement')"
+                    @click="switchTab('accounts')"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87" />
+                        <circle cx="9" cy="7" r="4" />
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                </button>
+                <button
+                    class="menu-item"
                     :class="{ active: activeTab === 'settings' }"
                     :title="t('actionsPanel')"
                     @click="switchTab('settings')"
@@ -663,379 +686,20 @@
                     </div>
                 </div>
 
-                <!-- Account Management Section (Full Width) -->
-                <div v-if="state.serviceConnected" class="full-width-section">
-                    <div class="status-card">
-                        <h3 class="card-title">
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="18"
-                                height="18"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                style="margin-right: 8px; vertical-align: text-bottom"
-                            >
-                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                                <circle cx="9" cy="7" r="4"></circle>
-                                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                            </svg>
-                            {{ t("accountManagement") }}
-                        </h3>
-                        <!-- Top action buttons: Add and Deduplicate -->
-                        <div class="action-group account-top-actions">
-                            <input
-                                ref="fileInput"
-                                type="file"
-                                style="display: none"
-                                accept=".json,.zip"
-                                multiple
-                                @change="handleFileUpload"
-                            />
-                            <!-- Left: Select all and batch delete -->
-                            <div class="batch-actions">
-                                <el-checkbox
-                                    :model-value="isAllSelected"
-                                    :indeterminate="hasSelection && !isAllSelected"
-                                    :disabled="state.accountDetails.length === 0"
-                                    @change="toggleSelectAll"
-                                >
-                                    {{ t("selectAll") }}
-                                </el-checkbox>
-                                <span v-if="hasSelection" class="selected-count">
-                                    {{ t("selectedCount", { count: selectedCount }) }}
-                                </span>
-                                <button
-                                    v-if="hasSelection"
-                                    class="btn-batch-delete"
-                                    :disabled="isBusy"
-                                    :title="t('batchDelete')"
-                                    @click="batchDeleteAccounts"
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="20"
-                                        height="20"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    >
-                                        <path
-                                            d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
-                                        />
-                                        <path d="m9.5 10 5 5" />
-                                        <path d="m14.5 10-5 5" />
-                                    </svg>
-                                </button>
-                                <button
-                                    v-if="hasSelection"
-                                    class="btn-batch-download"
-                                    :title="t('batchDownload')"
-                                    @click="batchDownloadAccounts"
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="20"
-                                        height="20"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    >
-                                        <path
-                                            d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
-                                        />
-                                        <path d="M12 10v6" />
-                                        <path d="m9 13 3 3 3-3" />
-                                    </svg>
-                                </button>
-                            </div>
-                            <!-- Right: Add, upload, and deduplicate -->
-                            <div class="icon-buttons">
-                                <button :disabled="isBusy" :title="t('btnAddUser')" @click="addUser">
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="20"
-                                        height="20"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    >
-                                        <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                                        <circle cx="8.5" cy="7" r="4"></circle>
-                                        <line x1="20" y1="8" x2="20" y2="14"></line>
-                                        <line x1="23" y1="11" x2="17" y2="11"></line>
-                                    </svg>
-                                </button>
-                                <button :disabled="isBusy" :title="t('uploadFile')" @click="triggerFileUpload">
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="20"
-                                        height="20"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    >
-                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                        <polyline points="17 8 12 3 7 8"></polyline>
-                                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                                    </svg>
-                                </button>
-                                <button
-                                    class="btn-warning"
-                                    :disabled="isBusy"
-                                    :title="t('btnDeduplicateAuth')"
-                                    @click="deduplicateAuth"
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="20"
-                                        height="20"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    >
-                                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-                                    </svg>
-                                </button>
-                            </div>
-                        </div>
-                        <!-- Account list -->
-                        <div class="account-list">
-                            <div
-                                v-for="item in state.accountDetails"
-                                :key="item.index"
-                                class="account-list-item"
-                                style="cursor: pointer"
-                                :class="{
-                                    'is-current': item.index === state.currentAuthIndex,
-                                    'is-selected': isAccountSelected(item.index),
-                                }"
-                                @click="toggleSelectAccount(item.index)"
-                            >
-                                <el-checkbox
-                                    :model-value="isAccountSelected(item.index)"
-                                    class="account-checkbox"
-                                    :aria-label="`Select account #${item.index}`"
-                                    @change="toggleSelectAccount(item.index)"
-                                    @click.stop
-                                />
-                                <el-tooltip
-                                    :content="getAccountDisplayName(item)"
-                                    placement="top"
-                                    effect="dark"
-                                    :hide-after="0"
-                                >
-                                    <div class="account-info">
-                                        <span class="account-index">#{{ item.index }}</span>
-                                        <span
-                                            class="account-email"
-                                            :class="{ 'is-error': item.isInvalid, 'is-duplicate': item.isDuplicate }"
-                                        >
-                                            {{ getAccountDisplayName(item) }}
-                                        </span>
-                                        <span v-if="item.index === state.currentAuthIndex" class="current-badge">
-                                            {{ t("tagCurrent") }}
-                                        </span>
-                                        <span
-                                            v-if="item.isDisabled"
-                                            class="disabled-badge"
-                                            :title="item.disabledReason || t('tagDisabled')"
-                                        >
-                                            {{ t("tagDisabled")
-                                            }}<template v-if="item.disabledStatus">
-                                                · {{ item.disabledStatus }}</template
-                                            >
-                                        </span>
-                                        <span v-else-if="item.isExpired" class="expired-badge">
-                                            {{ t("tagExpired") }}
-                                        </span>
-                                        <span v-if="item.route?.cooldownUntil" class="expired-badge">
-                                            {{ t("accountCooldown") }} ·
-                                            {{ formatCooldownRemaining(item.route.cooldownUntil) }}
-                                        </span>
-                                        <span v-else-if="item.route?.inFlight > 0" class="current-badge">
-                                            {{ t("accountInFlight") }}: {{ item.route.inFlight }}
-                                        </span>
-                                        <div v-if="item.route?.cooldownModels?.length" class="account-cooldown-models">
-                                            <span
-                                                v-for="cooldown in item.route.cooldownModels"
-                                                :key="cooldown.model"
-                                                class="cooldown-model-chip"
-                                            >
-                                                {{ cooldown.model }} · {{ formatCooldownRemaining(cooldown.until) }}
-                                            </span>
-                                        </div>
-                                        <div class="account-today-stats">
-                                            <strong>{{ t("todayStats") }}:</strong>
-                                            <span class="today-success"
-                                                >✓ {{ item.todayStats?.successCount || 0 }}</span
-                                            >
-                                            <span class="today-failure"
-                                                >✗ {{ item.todayStats?.failureCount || 0 }}</span
-                                            >
-                                            <span
-                                                v-for="modelStats in (item.todayStats?.models || []).slice(0, 3)"
-                                                :key="modelStats.model"
-                                                class="today-model-stat"
-                                            >
-                                                {{ modelStats.model }} {{ modelStats.successCount }}/{{
-                                                    modelStats.failureCount
-                                                }}
-                                            </span>
-                                            <span
-                                                v-if="(item.todayStats?.models || []).length > 3"
-                                                class="today-model-stat"
-                                                :title="formatTodayModelStats(item.todayStats.models)"
-                                            >
-                                                +{{ item.todayStats.models.length - 3 }}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </el-tooltip>
-                                <div class="account-actions">
-                                    <button
-                                        class="btn-disable"
-                                        :class="{ 'is-enable': item.isDisabled }"
-                                        :disabled="isBusy"
-                                        :title="item.isDisabled ? t('enableAccount') : t('disableAccount')"
-                                        @click.stop="toggleAccountEnabled(item)"
-                                    >
-                                        {{ item.isDisabled ? "▶" : "⏸" }}
-                                    </button>
-                                    <button
-                                        class="btn-test"
-                                        :disabled="isBusy || state.testingAccountIndex === item.index"
-                                        :title="t('testAccount')"
-                                        @click.stop="testAccountByIndex(item.index)"
-                                    >
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                        >
-                                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
-                                        </svg>
-                                    </button>
-                                    <button
-                                        class="btn-switch"
-                                        :class="{
-                                            'is-active': item.index === state.currentAuthIndex,
-                                            'is-fast': item.hasContext && item.index !== state.currentAuthIndex,
-                                        }"
-                                        :disabled="isBusy || item.index === state.currentAuthIndex"
-                                        :title="
-                                            item.index === state.currentAuthIndex
-                                                ? t('currentAccount')
-                                                : item.hasContext
-                                                  ? t('fastSwitch')
-                                                  : t('btnSwitchAccount')
-                                        "
-                                        @click.stop="switchAccountByIndex(item.index)"
-                                    >
-                                        <svg
-                                            v-if="item.index !== state.currentAuthIndex"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 1024 1024"
-                                            fill="currentColor"
-                                        >
-                                            <path
-                                                d="M886.2 604.8H137.8c-22.1 0-40 17.9-40 40 0 8.4 2.6 16.2 7 22.6 1.9 4.5 4.8 8.7 8.4 12.4L289.5 856c7.8 7.8 18 11.7 28.3 11.7s20.5-3.9 28.3-11.7c15.6-15.6 15.6-40.9 0-56.6L231.3 684.8h654.8c22.1 0 40-17.9 40-40s-17.8-40-39.9-40zM137.8 419.2h748.4c22.1 0 40-17.9 40-40 0-8.4-2.6-16.2-7-22.6-1.4-3.3-3.4-6.5-5.8-9.5L769.2 170.9c-14-17.1-39.2-19.6-56.3-5.6-17.1 14-19.6 39.2-5.6 56.3l96.3 117.6H137.8c-22.1 0-40 17.9-40 40s17.9 40 40 40z"
-                                            ></path>
-                                        </svg>
-                                        <svg
-                                            v-else
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                        >
-                                            <polyline points="20 6 9 17 4 12"></polyline>
-                                        </svg>
-                                    </button>
-                                    <button
-                                        class="btn-danger"
-                                        :disabled="isBusy"
-                                        :title="t('btnDeleteUser')"
-                                        @click.stop="deleteAccountByIndex(item.index)"
-                                    >
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                        >
-                                            <polyline points="3 6 5 6 21 6"></polyline>
-                                            <path
-                                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                                            ></path>
-                                            <line x1="10" y1="11" x2="10" y2="17"></line>
-                                            <line x1="14" y1="11" x2="14" y2="17"></line>
-                                        </svg>
-                                    </button>
-                                    <button :title="t('download')" @click.stop="downloadAccountByIndex(item.index)">
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                        >
-                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                            <polyline points="7 10 12 15 17 10"></polyline>
-                                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-                            <div v-if="state.accountDetails.length === 0" class="account-list-empty">
-                                {{ t("noActiveAccount") }}
-                            </div>
-                        </div>
-                    </div>
+                <div class="full-width-section">
+                    <el-button type="primary" plain @click="switchTab('accounts')">{{ t("amOpenAccounts") }}</el-button>
                 </div>
             </div>
+            <AccountsPage
+                v-if="activeTab === 'accounts'"
+                ref="accountsPage"
+                :accounts="state.accountDetails"
+                :current-index="state.currentAuthIndex"
+                :system-busy="state.isSystemBusy"
+                :loading="statusLoading"
+                :load-error="!statusLoading && !state.serviceConnected"
+                :refresh="updateContent"
+            />
 
             <!-- SETTINGS VIEW -->
             <div v-if="activeTab === 'settings'" class="view-container">
@@ -2932,21 +2596,32 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from "vue";
-import { useRouter } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox, ElNotification } from "element-plus";
 import CircleClose from "../components/CircleCloseIcon.vue";
-import JSZip from "jszip";
 import escapeHtml from "../utils/escapeHtml";
 import I18n from "../utils/i18n";
 import { useTheme } from "../utils/useTheme";
 import EnvVarTooltip from "../components/EnvVarTooltip.vue";
 import ManagementKeys from "../components/ManagementKeys.vue";
 import ModelProbePanel from "../components/ModelProbePanel.vue";
+import AccountsPage from "./AccountsPage.vue";
 
 const router = useRouter();
-const fileInput = ref(null);
+const route = useRoute();
+const accountsPage = ref(null);
+const statusLoading = ref(true);
+const allowNavigation = () => accountsPage.value?.canLeave() ?? true;
+onBeforeRouteLeave(allowNavigation);
+onBeforeRouteUpdate(allowNavigation);
 const usageStatsImportInput = ref(null);
-const activeTab = ref("home");
+const activeTab = computed(() =>
+    route.path === "/accounts"
+        ? "accounts"
+        : ["settings", "logs", "stats", "models"].includes(route.query.tab)
+          ? route.query.tab
+          : "home"
+);
 const isDownloadingUsageStats = ref(false);
 const isImportingUsageStats = ref(false);
 const isUsageStatsTransferBusy = computed(() => isDownloadingUsageStats.value || isImportingUsageStats.value);
@@ -3477,10 +3152,12 @@ const formatAccount = (authIndex, accountName) => {
 const fetchUsageStats = async () => {
     const res = await fetch("/api/usage-stats?limit=500");
     if (res.redirected) {
+        if (activeTab.value === "accounts") return;
         window.location.href = res.url;
         return;
     }
     if (res.status === 401) {
+        if (activeTab.value === "accounts") return;
         window.location.href = "/login";
         return;
     }
@@ -3673,19 +3350,7 @@ const scheduleUpdate = () => {
     }, randomInterval);
 };
 
-const getApiErrorMessage = data => {
-    if (data?.message) {
-        return t(data.message, data);
-    }
-
-    if (data?.error) {
-        return typeof data.error === "string" ? data.error : data.error.message;
-    }
-
-    return t("unknownError");
-};
-
-const switchTab = tabName => {
+const switchTab = async tabName => {
     if (activeTab.value === "logs") {
         const logContainer = document.getElementById("log-container");
         if (logContainer) {
@@ -3693,7 +3358,10 @@ const switchTab = tabName => {
         }
     }
 
-    activeTab.value = tabName;
+    await router.push({
+        path: tabName === "accounts" ? "/accounts" : "/",
+        query: ["home", "accounts"].includes(tabName) ? {} : { tab: tabName },
+    });
 
     if (tabName === "logs") {
         nextTick(() => {
@@ -3729,7 +3397,6 @@ const state = reactive({
     forceUrlContextEnabled: false,
     forceWebSearchEnabled: false,
     hasUpdate: false,
-    isSwitchingAccount: false,
     isSystemBusy: false,
     isUpdating: false,
     latestVersion: null,
@@ -3742,12 +3409,9 @@ const state = reactive({
     releaseUrl: null,
     retryDelay: 2000,
     safetySettingsThreshold: "OFF",
-    selectedAccounts: new Set(),
     serviceConnected: false,
 
     streamingModeReal: false,
-    // Selected account indices
-    testingAccountIndex: -1,
     // theme: handled by useTheme
     usageCount: 0,
 });
@@ -3793,8 +3457,6 @@ const activeContextsDisplay = computed(() => {
     return max === 0 ? `${active} / ∞` : `${active} / ${max}`;
 });
 
-const isBusy = computed(() => state.isSwitchingAccount || state.isSystemBusy);
-
 const formattedLogs = computed(() => {
     if (!state.logs) return "";
     // Escape HTML first to prevent XSS (though logs should be safe, better safe than sorry)
@@ -3816,209 +3478,6 @@ const formattedLogs = computed(() => {
 
     return safeLogs;
 });
-
-// Computed properties for batch selection
-const selectedCount = computed(() => state.selectedAccounts.size);
-const hasSelection = computed(() => state.selectedAccounts.size > 0);
-const isAllSelected = computed(() => {
-    if (state.accountDetails.length === 0) return false;
-    return state.accountDetails.every(acc => state.selectedAccounts.has(acc.index));
-});
-const isAccountSelected = index => state.selectedAccounts.has(index);
-
-// Toggle selection for a single account
-const toggleSelectAccount = index => {
-    if (state.selectedAccounts.has(index)) {
-        state.selectedAccounts.delete(index);
-    } else {
-        state.selectedAccounts.add(index);
-    }
-};
-
-// Toggle selection for all accounts
-const toggleSelectAll = () => {
-    if (isAllSelected.value) {
-        state.selectedAccounts.clear();
-    } else {
-        state.accountDetails.forEach(acc => {
-            state.selectedAccounts.add(acc.index);
-        });
-    }
-};
-
-// Clear selection
-const clearSelection = () => {
-    state.selectedAccounts.clear();
-};
-
-// Batch delete accounts
-const batchDeleteAccounts = async () => {
-    if (state.selectedAccounts.size === 0) {
-        ElMessage.warning(t("noAccountSelected"));
-        return;
-    }
-
-    const indices = Array.from(state.selectedAccounts);
-    const count = indices.length;
-
-    // Helper to perform batch delete
-    const performBatchDelete = async (forceDelete = false) => {
-        const notification = ElNotification({
-            duration: 0,
-            message: t("operationInProgress"),
-            title: t("warningTitle"),
-            type: "warning",
-        });
-        state.isSwitchingAccount = true;
-        let shouldUpdate = true;
-        try {
-            const res = await fetch("/api/accounts/batch", {
-                body: JSON.stringify({ force: forceDelete, indices }),
-                headers: { "Content-Type": "application/json" },
-                method: "DELETE",
-            });
-            const data = await res.json();
-
-            if (res.status === 409 && data.requiresConfirmation) {
-                shouldUpdate = false;
-                state.isSwitchingAccount = false;
-                ElMessageBox.confirm(t("warningDeleteCurrentAccount"), t("warningTitle"), {
-                    cancelButtonText: t("cancel"),
-                    confirmButtonText: t("ok"),
-                    lockScroll: false,
-                    type: "error",
-                })
-                    .then(() => performBatchDelete(true))
-                    .catch(e => {
-                        if (e !== "cancel") {
-                            console.error(e);
-                        }
-                    });
-                return;
-            }
-
-            if (res.status === 207) {
-                // Handle partial success (Multi-Status) first, as res.ok is true for 2xx
-                ElMessage.warning(
-                    t("batchDeletePartial", {
-                        failedCount: data.failedIndices?.length || 0,
-                        successCount: data.successCount,
-                    })
-                );
-                // Remove deleted items from selection
-                data.successIndices?.forEach(idx => state.selectedAccounts.delete(idx));
-            } else if (res.ok) {
-                // Handle full success (200 OK)
-                ElMessage.success(t("batchDeleteSuccess", { count: data.successCount }));
-                clearSelection();
-            } else {
-                ElMessage.error(t(data.message, data));
-            }
-        } catch (err) {
-            ElMessage.error(t("batchDeleteFailed", { error: err.message || err }));
-        } finally {
-            notification.close();
-            if (shouldUpdate) {
-                state.isSwitchingAccount = false;
-                updateContent();
-            }
-        }
-    };
-
-    ElMessageBox.confirm(t("confirmBatchDelete", { count }), t("warningTitle"), {
-        cancelButtonText: t("cancel"),
-        confirmButtonText: t("ok"),
-        lockScroll: false,
-        type: "warning",
-    })
-        .then(() => performBatchDelete(false))
-        .catch(e => {
-            if (e !== "cancel") {
-                console.error(e);
-            }
-        });
-};
-
-// Batch download accounts as ZIP
-const batchDownloadAccounts = async () => {
-    if (state.selectedAccounts.size === 0) {
-        ElMessage.warning(t("noAccountSelected"));
-        return;
-    }
-
-    const indices = Array.from(state.selectedAccounts);
-
-    try {
-        const res = await fetch("/api/accounts/batch/download", {
-            body: JSON.stringify({ indices }),
-            headers: { "Content-Type": "application/json" },
-            method: "POST",
-        });
-
-        if (!res.ok) {
-            let errorKey = "batchDownloadFailed";
-            let errorParams = { error: res.statusText || `HTTP ${res.status}` };
-
-            try {
-                const contentType = res.headers.get("content-type");
-                if (contentType && contentType.includes("application/json")) {
-                    const data = await res.json();
-                    if (data.message) {
-                        errorKey = data.message;
-                        errorParams = data;
-                    } else if (data.error) {
-                        const errorDetail = typeof data.error === "string" ? data.error : data.error.message;
-                        errorParams = { error: errorDetail };
-                    }
-                } else {
-                    errorParams = { error: `HTTP Error ${res.status}: ${res.statusText}` };
-                }
-            } catch (e) {
-                // Parsing failed, keep default errorParams
-            }
-            ElMessage.error(t(errorKey, errorParams));
-            return;
-        }
-
-        // Get the blob and trigger download
-        const blob = await res.blob();
-        const contentDisposition = res.headers.get("Content-Disposition");
-        let filename = "auth_batch.zip";
-        if (contentDisposition) {
-            const match = contentDisposition.match(/filename="?([^"]+)"?/);
-            if (match) {
-                filename = match[1];
-            }
-        }
-
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        // Use actual file count from response header, fallback to indices length
-        const actualCount = parseInt(res.headers.get("X-File-Count"), 10);
-        const requestCount = indices.length;
-        const failedCount = requestCount - (isNaN(actualCount) ? requestCount : actualCount);
-
-        if (!isNaN(actualCount) && failedCount > 0) {
-            ElMessage.warning(
-                t("batchDownloadPartial", {
-                    failedCount,
-                    successCount: actualCount,
-                })
-            );
-        } else {
-            ElMessage.success(t("batchDownloadSuccess", { count: !isNaN(actualCount) ? actualCount : requestCount }));
-        }
-    } catch (err) {
-        ElMessage.error(t("batchDownloadFailed", { error: err.message || err }));
-    }
-};
 
 const currentAccountName = computed(() => {
     if (state.currentAuthIndex < 0) {
@@ -4079,172 +3538,6 @@ const getAccountDisplayName = account => {
         return `${name} (${t("duplicateAuthHint", { index: account.canonicalIndex })})`;
     }
     return name;
-};
-
-const formatTodayModelStats = models =>
-    (models || []).map(item => `${item.model}: ${item.successCount}/${item.failureCount}`).join("\n");
-
-const formatCooldownRemaining = until => {
-    const remaining = Math.max(0, new Date(until).getTime() - Date.now());
-    if (remaining <= 0) return "0s";
-    const seconds = Math.ceil(remaining / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.ceil(seconds / 60);
-    if (minutes < 60) return `${minutes}m`;
-    return `${Math.ceil(minutes / 60)}h`;
-};
-
-const toggleAccountEnabled = async account => {
-    const enabled = Boolean(account.isDisabled);
-    const actionKey = enabled ? "enableAccount" : "disableAccount";
-    try {
-        await ElMessageBox.confirm(t("confirmAccountStateChange", { action: t(actionKey), index: account.index }), {
-            cancelButtonText: t("cancel"),
-            confirmButtonText: t("ok"),
-            type: enabled ? "success" : "warning",
-        });
-        const res = await fetch(`/api/accounts/${account.index}/enabled`, {
-            body: JSON.stringify({ enabled }),
-            headers: { "Content-Type": "application/json" },
-            method: "PUT",
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || data.message || `HTTP ${res.status}`);
-        ElMessage.success(t(data.message || (enabled ? "accountEnableSuccess" : "accountDisableSuccess")));
-        await updateContent();
-    } catch (error) {
-        if (error !== "cancel" && error !== "close") ElMessage.error(error.message || String(error));
-    }
-};
-
-const addUser = () => {
-    router.push("/auth");
-};
-
-// Delete account by index
-const deleteAccountByIndex = async targetIndex => {
-    if (targetIndex === null || targetIndex === undefined) {
-        ElMessage.warning(t("noAccountSelected"));
-        return;
-    }
-
-    const targetAccount = state.accountDetails.find(acc => acc.index === targetIndex);
-    const accountSuffix = targetAccount ? ` (${getAccountDisplayName(targetAccount)})` : "";
-
-    // Helper function to perform the actual deletion
-    const performDelete = async (forceDelete = false) => {
-        const notification = ElNotification({
-            duration: 0,
-            message: t("operationInProgress"),
-            title: t("warningTitle"),
-            type: "warning",
-        });
-        state.isSwitchingAccount = true;
-        let shouldUpdate = true;
-        try {
-            const url = forceDelete ? `/api/accounts/${targetIndex}?force=true` : `/api/accounts/${targetIndex}`;
-            const res = await fetch(url, {
-                method: "DELETE",
-            });
-            const data = await res.json();
-
-            if (res.status === 409 && data.requiresConfirmation) {
-                shouldUpdate = false;
-                state.isSwitchingAccount = false;
-                ElMessageBox.confirm(t("warningDeleteCurrentAccount"), t("warningTitle"), {
-                    cancelButtonText: t("cancel"),
-                    confirmButtonText: t("ok"),
-                    lockScroll: false,
-                    type: "error",
-                })
-                    .then(() => performDelete(true))
-                    .catch(e => {
-                        if (e !== "cancel") {
-                            console.error(e);
-                        }
-                    });
-                return;
-            }
-
-            const message = t(data.message, data);
-            if (res.ok) {
-                ElMessage.success(message);
-            } else {
-                ElMessage.error(message);
-            }
-        } catch (err) {
-            ElMessage.error(t("deleteFailed", { message: err.message || err }));
-        } finally {
-            notification.close();
-            if (shouldUpdate) {
-                state.isSwitchingAccount = false;
-                updateContent();
-            }
-        }
-    };
-
-    ElMessageBox.confirm(`${t("confirmDelete")} #${targetIndex}${accountSuffix}?`, t("warningTitle"), {
-        cancelButtonText: t("cancel"),
-        confirmButtonText: t("ok"),
-        lockScroll: false,
-        type: "warning",
-    })
-        .then(() => performDelete(false))
-        .catch(e => {
-            if (e !== "cancel") {
-                console.error(e);
-            }
-        });
-};
-
-const deduplicateAuth = () => {
-    ElMessageBox.confirm(t("accountDedupConfirm"), t("warningTitle"), {
-        cancelButtonText: t("cancel"),
-        confirmButtonText: t("ok"),
-        lockScroll: false,
-        type: "warning",
-    })
-        .then(async () => {
-            const notification = ElNotification({
-                duration: 0,
-                message: t("operationInProgress"),
-                title: t("warningTitle"),
-                type: "warning",
-            });
-            state.isSwitchingAccount = true;
-            try {
-                const res = await fetch("/api/accounts/deduplicate", { method: "POST" });
-                const data = await res.json();
-
-                const removedIndicesText = Array.isArray(data.removedIndices)
-                    ? `[${data.removedIndices.join(", ")}]`
-                    : "[]";
-                const failedText = Array.isArray(data.failed) ? JSON.stringify(data.failed) : "";
-
-                const message = t(data.message, {
-                    ...data,
-                    failed: failedText,
-                    removedIndices: removedIndicesText,
-                });
-
-                if (res.ok) {
-                    ElMessage.success(message);
-                } else {
-                    ElMessage.error(message);
-                }
-            } catch (err) {
-                ElMessage.error(t("accountDedupFailed", { error: err.message || err }));
-            } finally {
-                state.isSwitchingAccount = false;
-                notification.close();
-                updateContent();
-            }
-        })
-        .catch(e => {
-            if (e !== "cancel") {
-                console.error(e);
-            }
-        });
 };
 
 const handleForceThinkingBeforeChange = () => handleSettingChange("/api/settings/force-thinking", "forceThinking");
@@ -4503,74 +3796,6 @@ const handleStreamingModeBeforeChange = async () => {
     }
 };
 
-// Switch account by index
-const switchAccountByIndex = targetIndex => {
-    if (state.currentAuthIndex === targetIndex) {
-        ElMessage.warning(t("alreadyCurrentAccount"));
-        return;
-    }
-
-    const targetAccount = state.accountDetails.find(acc => acc.index === targetIndex);
-    const accountSuffix = targetAccount ? ` (${getAccountDisplayName(targetAccount)})` : "";
-
-    ElMessageBox.confirm(`${t("confirmSwitch")} #${targetIndex}${accountSuffix}?`, {
-        cancelButtonText: t("cancel"),
-        confirmButtonText: t("ok"),
-        lockScroll: false,
-        type: "warning",
-    })
-        .then(async () => {
-            const notification = ElNotification({
-                duration: 0,
-                message: t("switchingAccountNotice"),
-                title: t("warningTitle"),
-                type: "warning",
-            });
-            state.isSwitchingAccount = true;
-            try {
-                const res = await fetch("/api/accounts/current", {
-                    body: JSON.stringify({ targetIndex }),
-                    headers: { "Content-Type": "application/json" },
-                    method: "PUT",
-                });
-                const data = await res.json();
-                const message = t(data.message, data);
-                if (res.ok) {
-                    ElMessage.success(message);
-                } else {
-                    ElMessage.error(message);
-                }
-            } catch (err) {
-                ElMessage.error(t("settingFailed", { message: err.message || err }));
-            } finally {
-                state.isSwitchingAccount = false;
-                notification.close();
-                updateContent();
-            }
-        })
-        .catch(e => {
-            if (e !== "cancel") {
-                console.error(e);
-            }
-        });
-};
-
-const testAccountByIndex = async targetIndex => {
-    if (state.testingAccountIndex >= 0) return;
-    state.testingAccountIndex = targetIndex;
-    try {
-        const res = await fetch(`/api/accounts/${targetIndex}/test`, { method: "POST" });
-        const data = await res.json();
-        if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`);
-        ElMessage.success(t("testAccountSuccess"));
-    } catch (error) {
-        ElMessage.error(t("testAccountFailed").replace("{error}", error.message));
-    } finally {
-        state.testingAccountIndex = -1;
-        await updateContent();
-    }
-};
-
 const copyText = async text => {
     try {
         await navigator.clipboard.writeText(text);
@@ -4615,12 +3840,6 @@ const updateStatus = data => {
     state.retryDelay = data.status.retryDelay ?? 2000;
     state.safetySettingsThreshold = data.status.safetySettingsThreshold || "OFF";
 
-    const validIndices = new Set(state.accountDetails.map(acc => acc.index));
-    for (const idx of state.selectedAccounts) {
-        if (!validIndices.has(idx)) {
-            state.selectedAccounts.delete(idx);
-        }
-    }
     state.browserConnected = data.status.browserConnected;
     state.apiKeySource = data.status.apiKeySource;
     state.usageCount = data.status.usageCount;
@@ -4643,10 +3862,14 @@ const updateContent = async () => {
     try {
         const res = await fetch("/api/status");
         if (res.redirected) {
+            state.serviceConnected = false;
+            if (activeTab.value === "accounts") return;
             window.location.href = res.url;
             return;
         }
         if (res.status === 401) {
+            state.serviceConnected = false;
+            if (activeTab.value === "accounts") return;
             window.location.href = "/login";
             return;
         }
@@ -4663,307 +3886,9 @@ const updateContent = async () => {
     } catch (err) {
         console.error("Error fetching status:", err.message || err);
         state.serviceConnected = false;
-    }
-};
-
-const triggerFileUpload = () => {
-    if (fileInput.value) {
-        fileInput.value.click();
-    }
-};
-
-const handleFileUpload = async event => {
-    const files = Array.from(event.target.files);
-    if (!files.length) return;
-
-    // Reset input so same files can be selected again
-    event.target.value = "";
-
-    // Show notification immediately
-    const notification = ElNotification({
-        duration: 0,
-        message: t("operationInProgress"),
-        title: t("warningTitle"),
-        type: "warning",
-    });
-
-    // Set busy flag to disable UI during upload and rebalance
-    state.isSwitchingAccount = true;
-
-    try {
-        // Helper function to read file as ArrayBuffer (for zip)
-        const readFileAsArrayBuffer = file =>
-            new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = e => resolve(e.target.result);
-                reader.onerror = () => reject(new Error(t("fileReadFailed")));
-                reader.readAsArrayBuffer(file);
-            });
-
-        // Helper function to read file as text (for json)
-        const readFileAsText = file =>
-            new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = e => resolve({ content: e.target.result, name: file.name });
-                reader.onerror = () => reject(new Error(t("fileReadFailed")));
-                reader.readAsText(file);
-            });
-
-        // Helper function to upload a single file
-        const uploadFile = async fileData => {
-            let parsed;
-            try {
-                parsed = JSON.parse(fileData.content);
-            } catch (err) {
-                return { error: t("invalidJson"), filename: fileData.name, success: false };
-            }
-
-            try {
-                const res = await fetch("/api/files", {
-                    body: JSON.stringify({ content: parsed }),
-                    headers: { "Content-Type": "application/json" },
-                    method: "POST",
-                });
-
-                if (res.ok) {
-                    const data = await res.json();
-                    return { filename: data.filename || fileData.name, success: true };
-                }
-
-                let errorMsg;
-                try {
-                    const data = await res.json();
-                    errorMsg = getApiErrorMessage(data);
-                } catch (e) {
-                    // Response is not JSON or cannot be parsed, fallback to status text or unknown error
-                    if (res.statusText) {
-                        errorMsg = `HTTP Error ${res.status}: ${res.statusText}`;
-                    } else {
-                        errorMsg = `HTTP Error ${res.status}`;
-                    }
-                }
-                return { error: errorMsg, filename: fileData.name, success: false };
-            } catch (err) {
-                // Network or other fetch errors
-                return { error: err.message || t("networkError"), filename: fileData.name, success: false };
-            }
-        };
-
-        // Collect all JSON files to upload (including extracted from zip)
-        const jsonFilesToUpload = [];
-        const extractErrors = [];
-
-        for (const file of files) {
-            const lowerName = file.name.toLowerCase();
-
-            if (lowerName.endsWith(".zip")) {
-                // Extract JSON files from zip
-                try {
-                    let arrayBuffer;
-                    try {
-                        arrayBuffer = await readFileAsArrayBuffer(file);
-                    } catch (readErr) {
-                        extractErrors.push({ local: file.name, reason: readErr.message || t("fileReadFailed") });
-                        continue; // Skip zip processing if read failed
-                    }
-
-                    const zip = await JSZip.loadAsync(arrayBuffer);
-                    const zipEntries = Object.keys(zip.files);
-
-                    let foundJsonInZip = false;
-                    for (const entryName of zipEntries) {
-                        const entry = zip.files[entryName];
-                        // Skip directories and non-json files
-                        if (entry.dir || !entryName.toLowerCase().endsWith(".json")) continue;
-
-                        foundJsonInZip = true;
-                        try {
-                            const content = await entry.async("string");
-                            // Use format: zipName/entryName for display
-                            const displayName = `${file.name}/${entryName}`;
-                            jsonFilesToUpload.push({ content, name: displayName });
-                        } catch (err) {
-                            extractErrors.push({
-                                local: `${file.name}/${entryName}`,
-                                reason: t("zipExtractFailed"), // Prefer localized generic error for extraction issues
-                            });
-                        }
-                    }
-
-                    if (!foundJsonInZip) {
-                        extractErrors.push({ local: file.name, reason: t("zipNoJsonFiles") });
-                    }
-                } catch (err) {
-                    // Catch any other errors during zip processing (e.g. invalid zip format)
-                    extractErrors.push({ local: file.name, reason: t("zipExtractFailed") });
-                }
-            } else if (lowerName.endsWith(".json")) {
-                // Regular JSON file
-                try {
-                    const fileData = await readFileAsText(file);
-                    jsonFilesToUpload.push(fileData);
-                } catch (err) {
-                    extractErrors.push({ local: file.name, reason: err.message || t("fileReadFailed") });
-                }
-            }
-        }
-
-        // Check if we have anything to process
-        if (jsonFilesToUpload.length === 0 && extractErrors.length === 0) {
-            ElMessage.warning(t("noSupportedFiles"));
-            return;
-        }
-
-        // Upload all collected JSON files
-        const successFiles = [];
-        const failedFiles = [...extractErrors];
-
-        // Use batch upload API if multiple files, otherwise use single file upload
-        if (jsonFilesToUpload.length > 1) {
-            // Batch upload
-            const parsedFiles = [];
-            const parseErrors = [];
-
-            // Parse all files first
-            for (const fileData of jsonFilesToUpload) {
-                try {
-                    const parsed = JSON.parse(fileData.content);
-                    parsedFiles.push({ content: parsed, name: fileData.name });
-                } catch (err) {
-                    parseErrors.push({ local: fileData.name, reason: t("invalidJson") });
-                }
-            }
-
-            failedFiles.push(...parseErrors);
-
-            // Upload all valid files in one batch
-            if (parsedFiles.length > 0) {
-                try {
-                    const res = await fetch("/api/files/batch", {
-                        body: JSON.stringify({ files: parsedFiles.map(f => f.content) }),
-                        headers: { "Content-Type": "application/json" },
-                        method: "POST",
-                    });
-
-                    if (res.ok || res.status === 207) {
-                        const data = await res.json();
-                        // Process results array with proper index mapping
-                        if (data.results && Array.isArray(data.results)) {
-                            for (const result of data.results) {
-                                const originalFile = parsedFiles[result.index];
-                                if (result.success) {
-                                    successFiles.push({
-                                        local: originalFile?.name || `file-${result.index}`,
-                                        saved: result.filename || originalFile?.name || `file-${result.index}`,
-                                    });
-                                } else {
-                                    failedFiles.push({
-                                        local: originalFile?.name || `file-${result.index}`,
-                                        reason: result.error || t("unknownError"),
-                                    });
-                                }
-                            }
-                        }
-                    } else {
-                        // Batch upload failed completely
-                        let errorMsg;
-                        try {
-                            const data = await res.json();
-                            errorMsg = getApiErrorMessage(data);
-                        } catch (e) {
-                            if (res.statusText) {
-                                errorMsg = `HTTP Error ${res.status}: ${res.statusText}`;
-                            } else {
-                                errorMsg = `HTTP Error ${res.status}`;
-                            }
-                        }
-                        // Mark all parsed files as failed
-                        for (const fileData of parsedFiles) {
-                            failedFiles.push({ local: fileData.name, reason: errorMsg });
-                        }
-                    }
-                } catch (error) {
-                    // Network or other error - mark all parsed files as failed
-                    // (parseErrors are already in failedFiles)
-                    for (const fileData of parsedFiles) {
-                        failedFiles.push({ local: fileData.name, reason: error.message || t("networkError") });
-                    }
-                }
-            }
-        } else {
-            // Single file upload (use existing logic)
-            for (const fileData of jsonFilesToUpload) {
-                const result = await uploadFile(fileData);
-                if (result.success) {
-                    successFiles.push({ local: fileData.name, saved: result.filename });
-                } else {
-                    failedFiles.push({ local: fileData.name, reason: result.error });
-                }
-            }
-        }
-
-        // Build notification message with file details (scrollable container)
-        let messageHtml = '<div style="max-height: 50vh; overflow-y: auto;">';
-
-        if (successFiles.length > 0) {
-            messageHtml += `<div style="margin-bottom: 8px;"><strong style="color: var(--el-color-success);">${t("fileUploadBatchSuccess")} (${successFiles.length}):</strong></div>`;
-            messageHtml += '<ul style="margin: 0 0 12px 16px; padding: 0;">';
-            for (const f of successFiles) {
-                messageHtml += `<li style="word-break: break-all;">${escapeHtml(f.local)} → ${escapeHtml(f.saved)}</li>`;
-            }
-            messageHtml += "</ul>";
-        }
-
-        if (failedFiles.length > 0) {
-            messageHtml += `<div style="margin-bottom: 8px;"><strong style="color: var(--el-color-danger);">${t("fileUploadBatchFailed")} (${failedFiles.length}):</strong></div>`;
-            messageHtml += '<ul style="margin: 0 0 0 16px; padding: 0;">';
-            for (const f of failedFiles) {
-                messageHtml += `<li style="word-break: break-all;">${escapeHtml(f.local)}: ${escapeHtml(f.reason)}</li>`;
-            }
-            messageHtml += "</ul>";
-        }
-
-        messageHtml += "</div>";
-
-        // Determine notification type
-        let notifyType = "success";
-        if (failedFiles.length > 0 && successFiles.length === 0) {
-            notifyType = "error";
-        } else if (failedFiles.length > 0) {
-            notifyType = "warning";
-        }
-
-        // Build title with counts
-        const totalProcessed = successFiles.length + failedFiles.length;
-        let notifyTitle;
-        if (totalProcessed === 1) {
-            notifyTitle = t("fileUploadComplete");
-        } else {
-            notifyTitle = `${t("fileUploadBatchResult")} (✓${successFiles.length} ✗${failedFiles.length})`;
-        }
-
-        // Show result notification (keep open)
-        ElNotification({
-            dangerouslyUseHTMLString: true,
-            duration: 0,
-            message: messageHtml,
-            position: "top-right",
-            title: notifyTitle,
-            type: notifyType,
-        });
-
-        updateContent();
     } finally {
-        // Always close notification and reset busy flag
-        notification.close();
-        state.isSwitchingAccount = false;
+        statusLoading.value = false;
     }
-};
-
-// Download account by index
-const downloadAccountByIndex = accountIndex => {
-    if (accountIndex === null || accountIndex === undefined) return;
-    window.location.href = `/api/files/auth-${accountIndex}.json`;
 };
 
 const formatDownloadTimestamp = () => {
@@ -5161,8 +4086,9 @@ onMounted(() => {
     syncStatsFiltersViewport(statsFiltersMobileMediaQuery);
     statsFiltersMobileMediaQuery.addEventListener("change", syncStatsFiltersViewport);
 
-    updateContent().finally(scheduleUpdate);
-    fetchUsageStats().finally(scheduleUpdate);
+    Promise.all([updateContent(), fetchUsageStats()])
+        .catch(error => console.warn("Initial status load failed:", error.message))
+        .finally(scheduleUpdate);
 
     // Check for updates once on initial load
     checkForUpdates();
@@ -5184,7 +4110,7 @@ onBeforeUnmount(() => {
 });
 
 watchEffect(() => {
-    document.title = t("statusTitle");
+    document.title = t(activeTab.value === "accounts" ? "accountManagement" : "statusTitle");
 });
 </script>
 
@@ -5526,297 +4452,6 @@ watchEffect(() => {
             color: @warning-color;
         }
     }
-}
-
-/* Account list styles */
-.account-top-actions {
-    margin-bottom: 16px;
-    justify-content: space-between;
-}
-
-.batch-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    height: 36px; // Force height to match buttons
-
-    .el-checkbox {
-        height: 100%;
-        margin-right: 0;
-        display: flex;
-        align-items: center;
-    }
-}
-
-.selected-count {
-    font-size: 0.85rem;
-    color: @primary-color;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    height: 100%;
-}
-
-.btn-batch-delete {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: 1px solid @border-color;
-    border-radius: 8px;
-    background: @background-white;
-    color: @text-secondary;
-    cursor: pointer;
-    transition: all 0.2s;
-
-    &:hover:not(:disabled) {
-        border-color: @error-color;
-        color: @error-color;
-        background: transparent;
-    }
-
-    &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-}
-
-.btn-batch-download {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: 1px solid @border-color;
-    border-radius: 8px;
-    background: @background-white;
-    color: @text-secondary;
-    cursor: pointer;
-    transition: all 0.2s;
-
-    &:hover:not(:disabled) {
-        border-color: @primary-color;
-        color: @primary-color;
-        background: transparent;
-    }
-
-    &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-}
-
-.account-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    max-height: 400px;
-    overflow-y: auto;
-}
-
-.account-list-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 16px;
-    background: @background-light;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    transition: all 0.2s;
-
-    &:hover {
-        background: var(--bg-list-item-hover);
-    }
-
-    &.is-current {
-        border-color: @success-color;
-        background: rgba(var(--color-success-rgb), 0.25);
-    }
-
-    &.is-selected {
-        background: rgba(var(--color-primary-rgb), 0.25); // Darker blue background for selected
-    }
-
-    &.is-current.is-selected {
-        background: rgba(var(--color-primary-rgb), 0.25); // Use blue background like selected
-        border: 1px solid @success-color;
-    }
-}
-
-.account-checkbox {
-    flex-shrink: 0;
-    margin-right: 8px;
-}
-
-.account-info {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 5px;
-    flex: 1;
-    min-width: 0;
-}
-
-.account-index {
-    font-family: @font-family-mono;
-    font-size: 0.85rem;
-    color: @text-secondary;
-    flex-shrink: 0;
-}
-
-.account-email {
-    font-size: 0.9rem;
-    color: @text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-
-    &.is-error {
-        color: @error-color;
-    }
-
-    &.is-duplicate {
-        color: @warning-color;
-    }
-}
-
-.current-badge {
-    font-size: 0.75rem;
-    padding: 2px 8px;
-    background: @success-color;
-    color: @text-on-primary;
-    border-radius: 12px;
-    flex-shrink: 0;
-    margin-left: 0;
-    margin-right: 6px;
-}
-
-.disabled-badge {
-    background: rgba(var(--color-error-rgb), 0.14);
-    border: 1px solid rgba(var(--color-error-rgb), 0.35);
-    border-radius: 999px;
-    color: var(--color-error);
-    font-size: 11px;
-    padding: 1px 7px;
-}
-
-.account-cooldown-models,
-.account-today-stats {
-    display: flex;
-    flex-basis: 100%;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    margin-top: 5px;
-}
-.cooldown-model-chip {
-    background: rgba(var(--color-warning-rgb), 0.14);
-    border-radius: 999px;
-    color: var(--color-warning);
-    font-size: 11px;
-    padding: 2px 7px;
-}
-.account-today-stats {
-    color: var(--text-secondary);
-    font-size: 11px;
-}
-.today-success {
-    color: var(--color-success);
-}
-.today-failure {
-    color: var(--color-error);
-}
-.today-model-stat {
-    background: var(--bg-secondary);
-    border-radius: 4px;
-    padding: 1px 5px;
-}
-.btn-disable.is-enable {
-    color: var(--color-success);
-}
-.auto-disable-setting :deep(.el-select) {
-    width: 240px;
-}
-
-.expired-badge {
-    font-size: 0.75rem;
-    padding: 2px 8px;
-    background: @error-color;
-    color: @text-on-primary;
-    border-radius: 12px;
-    flex-shrink: 0;
-    margin-left: 0;
-    margin-right: 6px;
-}
-
-.account-actions {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-
-    button {
-        width: 28px;
-        height: 28px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid @border-color;
-        border-radius: 6px;
-        background: @background-white;
-        color: @text-secondary;
-        cursor: pointer;
-        transition: all 0.2s;
-
-        &:hover:not(:disabled) {
-            border-color: @primary-color;
-            color: @primary-color;
-        }
-
-        &.btn-switch:hover:not(:disabled) {
-            border-color: @success-color;
-            color: @success-color;
-        }
-
-        &.btn-switch.is-active {
-            background-color: @background-white;
-            border-color: @success-color;
-            color: @success-color;
-            opacity: 1 !important;
-            cursor: not-allowed;
-        }
-
-        &.btn-switch.is-fast {
-            color: #f59e0b;
-            border-color: #fcd34d;
-        }
-
-        &.btn-switch.is-fast:hover:not(:disabled) {
-            border-color: @success-color;
-            color: @success-color;
-            background-color: @background-white;
-        }
-
-        &:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-
-        &.btn-danger:hover:not(:disabled) {
-            border-color: @error-color;
-            color: @error-color;
-        }
-    }
-}
-
-.account-list-empty {
-    padding: 24px;
-    text-align: center;
-    color: @text-secondary;
-    font-size: 0.9rem;
 }
 
 .settings-switches {

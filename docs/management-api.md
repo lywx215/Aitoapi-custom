@@ -34,29 +34,29 @@
 
 以下路径均相对 `/api/manage/v1`。`202` 表示持久化任务提交，必须带 `Idempotency-Key`。`200` 表示同步结果。
 
-| 方法与路径                       | 必需 scope                                    | 成功 | 输入/结果                                                       |
-| -------------------------------- | --------------------------------------------- | ---- | --------------------------------------------------------------- |
-| GET `/system/status`             | system:read                                   | 200  | 安全运行计数及状态，无控制台日志                                |
-| GET `/system/readiness`          | system:read                                   | 200  | `{ready,checks}`；未就绪时 `ready:false`                        |
-| GET `/accounts`                  | accounts:read                                 | 200  | Account 分页                                                    |
-| GET `/accounts/{id}`             | accounts:read                                 | 200  | Account 元数据                                                  |
-| POST `/accounts/import`          | accounts:write + accounts:test                | 202  | `{items:[{clientRef,credentials}],model?}`                      |
-| POST `/accounts/batch`           | accounts:write；archive 还需 accounts:archive | 202  | `{action,accountIds,force?}`                                    |
-| POST `/accounts/{id}/test`       | accounts:test                                 | 202  | `{mode?,model?}`；默认 model                                    |
-| POST `/accounts/export`          | accounts:export                               | 200  | `{accountIds}` → `{items:[{accountId,index,credentials}]}`      |
-| POST `/accounts/{id}/archive`    | accounts:archive                              | 202  | 可选 `{force}`                                                  |
-| POST `/accounts/{id}/restore`    | accounts:archive                              | 202  | 恢复同一 identity，保持手动禁用                                 |
-| POST `/accounts/{id}/reload`     | accounts:write                                | 202  | 可选 `{force}`                                                  |
+| 方法与路径                       | 必需 scope                                    | 成功 | 输入/结果                                                                                                                                                  |
+| -------------------------------- | --------------------------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET `/system/status`             | system:read                                   | 200  | 安全运行计数及状态，无控制台日志                                                                                                                           |
+| GET `/system/readiness`          | system:read                                   | 200  | `{ready,checks}`；未就绪时 `ready:false`                                                                                                                   |
+| GET `/accounts`                  | accounts:read                                 | 200  | Account 分页                                                                                                                                               |
+| GET `/accounts/{id}`             | accounts:read                                 | 200  | Account 元数据                                                                                                                                             |
+| POST `/accounts/import`          | accounts:write + accounts:test                | 202  | `{items:[{clientRef,credentials}],model?}`                                                                                                                 |
+| POST `/accounts/batch`           | accounts:write；archive 还需 accounts:archive | 202  | `{action,accountIds,force?}`                                                                                                                               |
+| POST `/accounts/{id}/test`       | accounts:test                                 | 202  | `{mode?,model?}`；默认 model                                                                                                                               |
+| POST `/accounts/export`          | accounts:export                               | 200  | `{accountIds}` → `{items:[{accountId,index,credentials}]}`                                                                                                 |
+| POST `/accounts/{id}/archive`    | accounts:archive                              | 202  | 可选 `{force}`                                                                                                                                             |
+| POST `/accounts/{id}/restore`    | accounts:archive                              | 202  | 恢复同一 identity，保持手动禁用                                                                                                                            |
+| POST `/accounts/{id}/reload`     | accounts:write                                | 202  | 可选 `{force}`                                                                                                                                             |
 | PUT `/accounts/{id}/credentials` | accounts:write + accounts:test                | 202  | 旧 body 直接为凭证对象或 JSON 字符串；新客户端可用 `{credentials,expectedCredentialVersion,expectedStateVersion}`，版本须成对，过期返回 `VERSION_CONFLICT` |
 | PATCH `/accounts/{id}`           | accounts:write                                | 200  | `{enabled:boolean,force?:boolean,expectedCredentialVersion?:integer,expectedStateVersion?:integer}`；两个版本须同时传入，不匹配返回 409 `VERSION_CONFLICT` |
-| GET `/settings`                  | settings:read                                 | 200  | `{values,persistentKeys}`                                       |
-| PATCH `/settings`                | settings:write                                | 200  | 显式设置 patch → `{values,persisted,applied,applicationError?}` |
-| GET `/usage`                     | usage:read                                    | 200  | 安全用量记录分页                                                |
-| GET `/audit`                     | audit:read                                    | 200  | 审计分页                                                        |
-| POST `/system/reload-auth`       | accounts:write                                | 202  | 外部文件与元数据协调、再平衡                                    |
-| GET `/tasks`                     | tasks:read                                    | 200  | Task 分页                                                       |
-| GET `/tasks/{id}`                | tasks:read                                    | 200  | 单个 Task                                                       |
-| POST `/tasks/{id}/cancel`        | tasks:write                                   | 200  | 请求合作取消，返回当前 Task                                     |
+| GET `/settings`                  | settings:read                                 | 200  | `{values,persistentKeys}`                                                                                                                                  |
+| PATCH `/settings`                | settings:write                                | 200  | 显式设置 patch → `{values,persisted,applied,applicationError?}`                                                                                            |
+| GET `/usage`                     | usage:read                                    | 200  | 安全用量记录分页                                                                                                                                           |
+| GET `/audit`                     | audit:read                                    | 200  | 审计分页                                                                                                                                                   |
+| POST `/system/reload-auth`       | accounts:write                                | 202  | 外部文件与元数据协调、再平衡                                                                                                                               |
+| GET `/tasks`                     | tasks:read                                    | 200  | Task 分页                                                                                                                                                  |
+| GET `/tasks/{id}`                | tasks:read                                    | 200  | 单个 Task                                                                                                                                                  |
+| POST `/tasks/{id}/cancel`        | tasks:write                                   | 200  | 请求合作取消，返回当前 Task                                                                                                                                |
 
 密钥路由另有 `GET /api/management-keys`（分页，200）、`POST /api/management-keys`（201，`data:{key,token}`）、`DELETE /api/management-keys/{id}`（200，`data:{id,revoked}`）。它们使用上述控制台密码 session，不使用管理 Bearer。
 
@@ -75,9 +75,32 @@
 
 Task 包含 `taskId`、`kind`、`createdByKeyId`、时间戳、`counts`、`items`、`result` 和可选 `error`。item 保留 `clientRef`、目标 `accountId/index`、`status/progress/stage/error`。状态为 `queued/running/succeeded/partial/failed/cancelled/interrupted`；前两者非终态。批量应逐项检查，`partial` 不代表所有账户成功。
 
+上传提交与验证结果独立：凭证实际写入后，任务项增加可选 `item.upload`，与 `item.result` 并列：
+
+```json
+{
+  "status": "committed",
+  "accountId": "00000000-0000-4000-8000-000000000004",
+  "index": 4,
+  "credentialVersion": 1,
+  "stateVersion": 1,
+  "committedAt": "2026-09-24T03:17:50.000Z"
+}
+```
+
+此回执仅证明该次凭证提交，不证明模型验证通过或账号已启用。import 在初始禁用凭证写入后即记录回执，因此验证超时、失败、取消或重启中断时，可以同时呈现“已上传 / 验证失败”。replace 先验证候选、后替换凭证，候选失败不会产生本次上传回执，旧凭证仍保留。test 和启停操作不产生上传回执。`counts` 仍统计任务最终结果；调用方统计已上传数量应另计 `items[].upload.status == "committed"`，它可以与验证失败数量重叠。
+
+回执固定保存实际提交时的双版本；import 随后启用账号时，`item.result.stateVersion` 可以高于 `item.upload.stateVersion`。后续替换凭证、手动停用或 429 不覆盖旧回执。没有 upload 字段只表示缺少该次提交证据，旧任务同样如此，不能统一解释为从未上传。202/taskId/accountId 均不能单独证明某次新来源版本已提交。调用方把派发时固化的本地来源版本按 origin、taskId、item 序号关联到回执，不能用最新来源版本反推历史提交。
+
+非秘密回执按 task/item 关联，与凭证一起进入 CredentialStore 的回滚 journal；`tasks.json` 是该证据的独立副本。若进程在凭证提交后、任务回执落盘前退出，启动时会补回真实提交证据，保持任务 interrupted/failed/cancelled 等结果，不重新验证或启用。未完成的凭证 journal 会连同回执一起回滚。恢复不依赖当前账号版本、同邮箱匹配或已清理的任务私有输入。旧任务缺证据时保持缺失。
+
 成功 import/replace/test 的验证结果 `item.result` 还包含 `credentialVersion` 和 `stateVersion`：import/replace 是实际提交后的版本，test 是验证后复核通过时的版本。只有两个版本与当前账号完全一致，历史 `model_verified` 才能作为当前凭证的验证证据。失败项与旧任务可以没有这两个字段，不能用当前版本补填。
 
 重启后 queued 恢复排队，running 标为 interrupted，禁止自动重放。取消是合作式的：200 取消响应中的状态可能仍为 running，后续轮询直到终态；已经写入的状态不回滚。任务和审计保留 30 天，不能把它们作为无限期账本。
+
+如残留 queued 快照已有凭证提交证据，也会标为 interrupted，防止重复写入或模型调用。凭证元数据中的提交证据当前不随任务的 30 天清理删除，也不提供独立历史查询接口；调用方应将取得的回执保存到自己的持久历史。现有凭证元数据 schemaVersion 和任务 version 保持为 1，新增字段可选；回滚到旧服务时可保留字段，但旧服务不能补回缺失回执，不得通过手工替换元数据文件丢弃新证据。
+
+本轮没有自动清理 `uploadReceipts`：记录数随已提交的 import/replace 次数线性增长，现有元数据整文件写入和回滚 journal 的体积、写入成本也会随之增加。任务 30 天清理不会删除未补回的提交证据。大量长期写入场景需要后续设计“终态任务已补回且调用方已持久保存”的保留策略后再压缩，不能按当前账号版本或时间直接删掉尚未核对的记录。
 
 导入默认使用 `gemini-3.8-flash` 测试候选凭证后自动启用；重复邮箱报错，不替换已有账户。替换凭证先隔离验证候选，再按读取时的 credentialVersion/stateVersion 校验提交。手动状态更改优先，旧验证快照不得覆盖较新的禁用/过期状态。账户列表、任务、审计和错误不返回 cookie/localStorage/credentialState，只有有 export 权限的导出接口可以返回凭证。
 

@@ -330,12 +330,18 @@ const ensureConnected = () => {
     return true;
 };
 
+const accountReturnPath =
+    new URLSearchParams(window.location.search).get("returnTo") === "/accounts" ? "/accounts" : null;
 const goBack = () => {
+    if (accountReturnPath) {
+        window.location.href = accountReturnPath;
+        return;
+    }
     if (window.history.length > 1) {
         window.history.back();
         return;
     }
-    window.location.href = "/";
+    window.location.href = accountReturnPath || "/";
 };
 
 const handleIntroCancel = () => {
@@ -529,7 +535,7 @@ const saveAuth = async (accountName = null) => {
         if (data.message === "vncAuthSaveSuccess") {
             ElMessage.success(t("authSaveSuccess").replace("{accountName}", data.accountName));
             sessionStorage.setItem("newAuthInfo", JSON.stringify(data));
-            window.location.href = "/";
+            window.location.href = accountReturnPath || "/";
             return;
         }
 

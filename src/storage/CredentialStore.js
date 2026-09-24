@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { createHash, randomUUID } = require("crypto");
+const { invalidReceipt, operationKey, publicReceipt } = require("./UploadReceipt");
 
 const STATE_FIELDS = ["disabled", "expired", "disabledReason", "disabledStatus", "disabledAt"];
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -53,6 +54,20 @@ class CredentialStore {
                     !/^auth-\d+\.json$/.test(record.fileName)
                 ) {
                     throw new Error("Invalid credential account metadata");
+                }
+            }
+            if (this.state.uploadReceipts !== undefined) {
+                if (
+                    !this.state.uploadReceipts ||
+                    typeof this.state.uploadReceipts !== "object" ||
+                    Array.isArray(this.state.uploadReceipts)
+                )
+                    throw invalidReceipt();
+                for (const [key, receipt] of Object.entries(this.state.uploadReceipts)) {
+                    const [taskId, itemIndex] = key.split(":");
+                    if (operationKey({ itemIndex: Number(itemIndex), kind: receipt?.kind, taskId }) !== key)
+                        throw invalidReceipt();
+                    publicReceipt(receipt);
                 }
             }
             this.refreshSync();
@@ -253,6 +268,30 @@ class CredentialStore {
             .map(row => this._public(row));
     }
 
+    getUploadReceipt(operation) {
+        if (this.poisoned) throw error("PERSISTENCE_ERROR", 500, "Credential storage requires restart recovery");
+        const receipt = this.state.uploadReceipts?.[operationKey(operation)];
+        if (!receipt) return null;
+        if (receipt.kind !== operation.kind) throw invalidReceipt();
+        return publicReceipt(receipt);
+    }
+
+    _recordUpload(candidate, record, operation) {
+        if (!operation) return;
+        const key = operationKey(operation);
+        // Replaying a task must never overwrite its evidence or create another account/version.
+        if (candidate.uploadReceipts?.[key]) throw invalidReceipt();
+        candidate.uploadReceipts ||= {};
+        candidate.uploadReceipts[key] = {
+            ...publicReceipt({
+                ...record,
+                committedAt: new Date().toISOString(),
+                status: "committed",
+            }),
+            kind: operation.kind,
+        };
+    }
+
     read(index) {
         const record = this.state.accounts[this._index(index)];
         if (!record || record.deleted || record.archived || this.poisoned) return null;
@@ -353,7 +392,7 @@ class CredentialStore {
         }
     }
 
-    _save(record, data, { credential = false, state = false } = {}) {
+    _save(record, data, { credential = false, state = false, uploadOperation } = {}) {
         const candidate = clone(this.state);
         const raw = JSON.stringify(data, null, 2);
         const updated = candidate.accounts[record.index];
@@ -361,12 +400,14 @@ class CredentialStore {
         Object.assign(updated, this._describe(data, raw), { updatedAt: new Date().toISOString() });
         if (credential) updated.credentialVersion++;
         if (state) updated.stateVersion++;
+        this._recordUpload(candidate, updated, uploadOperation);
         this._commit(candidate, [{ path: this._authPath(record), text: raw }]);
         return { ...this._public(updated), changed: true };
     }
 
-    async create(content, { disabled = false, reason = "pending_verification" } = {}) {
+    async create(content, { disabled = false, reason = "pending_verification", uploadOperation } = {}) {
         const data = CredentialStore.validate(content);
+        if (uploadOperation && uploadOperation.kind !== "import") throw invalidReceipt();
         if (typeof disabled !== "boolean" || typeof reason !== "string")
             throw error("INVALID_STATE", 400, "Invalid initial account state");
         for (const key of STATE_FIELDS) delete data[key];
@@ -374,6 +415,7 @@ class CredentialStore {
             Object.assign(data, { disabled: true, disabledAt: new Date().toISOString(), disabledReason: reason });
         return this._enqueue("allocation", () => {
             this.refreshSync();
+            if (uploadOperation && this.getUploadReceipt(uploadOperation)) throw invalidReceipt();
             const reservation = clone(this.state);
             const index = reservation.highWater + 1;
             this._index(index);
@@ -396,6 +438,7 @@ class CredentialStore {
                 ...this._describe(data, raw),
             };
             candidate.accounts[index] = record;
+            this._recordUpload(candidate, record, uploadOperation);
             this._commit(candidate, [{ path: this._authPath(record), text: raw }]);
             return { ...this._public(record), changed: true };
         });
@@ -403,12 +446,13 @@ class CredentialStore {
 
     async replace(index, content, options = {}) {
         this._index(index);
+        if (options.uploadOperation && options.uploadOperation.kind !== "replace") throw invalidReceipt();
         const data = CredentialStore.validate(content);
         return this._enqueue(index, () => {
             const record = this._active(index, options);
             for (const key of STATE_FIELDS) delete data[key];
             Object.assign(data, this._stateFields(record));
-            return this._save(record, data, { credential: true });
+            return this._save(record, data, { credential: true, uploadOperation: options.uploadOperation });
         });
     }
 

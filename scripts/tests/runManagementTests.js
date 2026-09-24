@@ -10,6 +10,7 @@ const tests = [
     "managementStartup",
     "managementKeys",
     "managementTasks",
+    "managementUploadReceipts",
     "managementRoutes",
     "managementVerifier",
     "managementLiveHarness",

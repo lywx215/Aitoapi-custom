@@ -12,6 +12,7 @@ import AuthPage from '../pages/AuthPage.vue';
 import NotFound from '../pages/NotFound.vue';
 
 const routes = [
+    { component: StatusPage, name: 'accounts', path: '/accounts' },
     {
         component: StatusPage,
         name: 'status',

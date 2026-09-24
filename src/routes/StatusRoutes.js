@@ -137,7 +137,7 @@ class StatusRoutes {
             res.status(200).json(healthStatus);
         });
 
-        app.get("/", isAuthenticated, (req, res) => {
+        app.get(["/", "/accounts"], isAuthenticated, (req, res) => {
             res.status(200).sendFile(this.distIndexPath);
         });
 
