@@ -4,6 +4,7 @@ const GenerationError = require("./GenerationError");
 const GenerationInputAdapter = require("./GenerationInputAdapter");
 const GenerationResponseWriter = require("./GenerationResponseWriter");
 const GenerationResultGuard = require("./GenerationResultGuard");
+const Diagnostics = require("../diagnostics/Diagnostics");
 
 function normalizeError(error, guard) {
     if (error instanceof GenerationError) return error;
@@ -34,6 +35,7 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
     const config = handler.config;
     const registry = handler.connectionRegistry;
     const requestId = proxyRequest.request_id;
+    const publicSpan = Diagnostics.get(req);
     const started = req.__generationStartedAt || Date.now();
     const timeout = config.generationPreoutputTimeoutMs || 300000;
     const deadline = started + timeout;
@@ -122,6 +124,7 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                 queue = registry.createMessageQueue(requestId, authIndex, proxyRequest.request_attempt_id);
             }
             attemptId = proxyRequest.request_attempt_id;
+            publicSpan?.startAttempt(attemptId);
             attemptsUsed++;
             budget = new GenerationBudget(config.generationBufferBytes, config.generationGlobalBufferBytes);
             const attemptQueue = queue;
@@ -153,12 +156,14 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                     clearTimeout(timer);
                     timer = null;
                 },
+                publicSpan,
                 res,
                 responseDefaults,
                 signal,
                 stream,
                 timeoutMs: config.streamTimeoutMs || 60000,
             });
+            writer.upstreamStreaming = proxyRequest.streaming_mode === "real";
             diagnostics?.emit("attempt_started", { attemptId, attemptNo: attempt, authIndex });
             if (diagnostics)
                 diagnostics.snapshot = () => ({
@@ -190,6 +195,20 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                     statusCode: headerStatus,
                     upstreamStatus: headerStatus,
                 });
+                if (publicSpan?.debugActive)
+                    publicSpan.attemptFinished(
+                        {
+                            ...guard.summary(),
+                            attemptId,
+                            attemptNo: attempt,
+                            eofSeen: eof,
+                            errorCode: result.code,
+                            parserFinishOk: parserFinished,
+                            resultClass: result.resultClass,
+                            upstreamStatus: headerStatus,
+                        },
+                        guard.usage
+                    );
                 diagnostics?.emit(
                     "attempt_finished",
                     {
@@ -226,6 +245,8 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                     if (frame.parsed) {
                         const previousEffective = guard.effective;
                         guard.observe(frame.parsed);
+                        publicSpan?.observeFrame(attemptId, frame.parsed);
+                        if (!previousEffective && guard.effective) publicSpan?.observeTime("firstEffectiveOutputMs");
                         if (!previousEffective && guard.effective)
                             diagnostics?.emit("first_effective_output", {
                                 attemptId,
@@ -346,6 +367,7 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                         responseResult = guard.finish();
                         break;
                     } else if (message.event_type === "chunk") {
+                        publicSpan?.observeTime("firstUpstreamByteMs");
                         if (!parser || typeof message.data !== "string")
                             throw new GenerationError("invalid_upstream_response");
                         if (diagnostics?.active) {

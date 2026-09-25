@@ -1387,6 +1387,7 @@ class FormatConverter {
             if (streamState.usage) {
                 finalResponse.usage = streamState.usage;
             }
+            require("../diagnostics/Conversion").observe(streamState, finalResponse.usage);
             chunksToSend.push(`data: ${JSON.stringify(finalResponse)}\n\n`);
         }
 
@@ -1836,6 +1837,7 @@ class FormatConverter {
                 };
 
                 const completedAt = Math.floor(Date.now() / 1000);
+                require("../diagnostics/Conversion").observe(streamState, responseUsage);
                 const finalOutput = (streamState.outputItemsByIndex || []).filter(Boolean);
 
                 const incomplete =
@@ -2841,6 +2843,7 @@ class FormatConverter {
                 type: "message_start",
             });
             streamState.messageStartSent = true;
+            require("../diagnostics/Conversion").observe(streamState, events[events.length - 1].message.usage);
         }
 
         // Process content parts
@@ -2996,6 +2999,7 @@ class FormatConverter {
             });
 
             events.push({ type: "message_stop" });
+            require("../diagnostics/Conversion").observe(streamState, events[events.length - 2].usage);
         }
 
         if (events.length === 0) return null;

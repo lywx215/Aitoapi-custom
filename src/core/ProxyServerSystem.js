@@ -16,6 +16,7 @@ const path = require("path");
 const { URL } = require("url");
 
 const LoggingService = require("../utils/LoggingService");
+const Diagnostics = require("../diagnostics/Diagnostics");
 const AuthSource = require("../auth/AuthSource");
 const BrowserManager = require("./BrowserManager");
 const ConnectionRegistry = require("./ConnectionRegistry");
@@ -258,6 +259,7 @@ class ProxyServerSystem extends EventEmitter {
             }
 
             if (clientKey && serverApiKeys.includes(clientKey)) {
+                Diagnostics.get(req)?.authenticated();
                 this.logger.info(
                     `[Auth] API Key verification passed (from: ${this.webRoutes.authRoutes.getClientIP(req)})`
                 );
@@ -391,10 +393,13 @@ class ProxyServerSystem extends EventEmitter {
 
     _createExpressApp() {
         const app = express();
+        this.diagnostics ||= new Diagnostics(this.logger);
+        app.use(this.diagnostics.middleware());
 
         // Request logging
         app.use((req, res, next) => {
             if (
+                this.diagnostics.accessEnabled &&
                 req.path !== "/api/status" &&
                 req.path !== "/api/usage-stats" &&
                 req.path !== "/" &&
@@ -701,6 +706,7 @@ class ProxyServerSystem extends EventEmitter {
      * Gracefully shutdown the server system
      */
     async shutdown() {
+        this.diagnostics?.close();
         this.logger.info("[System] Shutting down server system...");
         const managementCleanup = await Promise.allSettled([
             Promise.resolve().then(() => this.modelProbeService?.close()),

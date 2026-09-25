@@ -15,6 +15,8 @@ const AuthSwitcher = require("../auth/AuthSwitcher");
 const FormatConverter = require("./FormatConverter");
 const GenerationPipeline = require("./GenerationPipeline");
 const LoggingService = require("../utils/LoggingService");
+const Diagnostics = require("../diagnostics/Diagnostics");
+const DiagnosticHeaders = require("../diagnostics/Headers");
 const { isUserAbortedError } = require("../utils/CustomErrors");
 const { QueueClosedError, QueueTimeoutError } = require("../utils/MessageQueue");
 
@@ -1375,6 +1377,14 @@ class RequestHandler {
     }
 
     _startTrackedRequest(requestId, req, meta = {}) {
+        const span = Diagnostics.get(req);
+        span?.bind(requestId);
+        if (span) {
+            this.diagnosticRequests ||= new Map();
+            this.diagnosticRequests.set(requestId, span);
+            req.res.once("close", () => this.diagnosticRequests.delete(requestId));
+            req.res.once("finish", () => this.diagnosticRequests.delete(requestId));
+        }
         if (meta.requestCategory === "generation") {
             req.__generationStartedAt = Date.now();
             if (req.res)
@@ -2486,7 +2496,7 @@ class RequestHandler {
             );
             const proxyRequest = {
                 body: JSON.stringify(googleRequest),
-                headers: req.headers,
+                headers: DiagnosticHeaders.copiedObject(req.headers),
                 is_generative: false,
                 method: "POST",
                 path,
@@ -2554,7 +2564,7 @@ class RequestHandler {
             const uploadBodyBuffer = this._patchUploadStartMetadata(req);
             const proxyRequest = {
                 body_b64: uploadBodyBuffer ? uploadBodyBuffer.toString("base64") : undefined,
-                headers: req.headers,
+                headers: DiagnosticHeaders.copiedObject(req.headers),
                 is_generative: false, // Uploads are never generative
                 method: req.method,
                 path: req.path.replace(/^\/proxy/, ""),
@@ -5222,7 +5232,7 @@ class RequestHandler {
 
         return {
             body: req.method !== "GET" ? JSON.stringify(requestBodyObj) : undefined,
-            headers: req.headers,
+            headers: DiagnosticHeaders.copiedObject(req.headers),
             is_generative:
                 req.method === "POST" &&
                 (req.path.includes("generateContent") || req.path.includes("streamGenerateContent")),
@@ -5269,12 +5279,22 @@ class RequestHandler {
                 `[Request] Forwarding request #${proxyRequest.request_id} via connection for authIndex=${authIndex}` +
                     ` (attempt=${proxyRequest.request_attempt_id})`
             );
-            connection.send(
-                JSON.stringify({
-                    event_type: "proxy_request",
-                    ...proxyRequest,
-                })
-            );
+            const call = this.diagnosticRequests?.get(proxyRequest.request_id)?.startCall({
+                attemptId: proxyRequest.request_attempt_id || null,
+                attemptNo: proxyRequest.request_attempt_number || null,
+                retryScope: proxyRequest.request_attempt_id
+                    ? proxyRequest.is_generative
+                        ? "generation"
+                        : "request_handler"
+                    : null,
+            });
+            this.connectionRegistry.observeDiagnosticDispatch?.(proxyRequest, authIndex, connection, call);
+            try {
+                connection.send(JSON.stringify({ event_type: "proxy_request", ...proxyRequest }));
+            } catch (error) {
+                call?.finish("transport_error");
+                throw error;
+            }
         } else {
             throw new Error(`Unable to forward request: No WebSocket connection found for authIndex=${authIndex}`);
         }

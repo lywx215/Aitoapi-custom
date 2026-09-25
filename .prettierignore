@@ -32,3 +32,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Frozen external contract: byte-for-byte upstream artifact, independently verified.
+contracts/diagnostics/v1/
+tmp/

@@ -12,6 +12,7 @@ class GenerationResponseWriter {
         signal,
         timeoutMs = 60000,
         diagnostics,
+        publicSpan,
         onCommit = () => {},
         responseDefaults = {},
     }) {
@@ -23,12 +24,14 @@ class GenerationResponseWriter {
             format,
             model,
             onCommit,
+            publicSpan,
             res,
             signal,
             stream,
             timeoutMs,
         });
         this.state = { responseDefaults };
+        this.convertedObservation = require("../diagnostics/Conversion").register(this.state, publicSpan, format);
         this.pending = [];
         this.pendingSize = 0;
         this.bytes = 0;
@@ -190,11 +193,23 @@ class GenerationResponseWriter {
                 }
             }
             const serialized = JSON.stringify(body);
+            require("../diagnostics/Conversion").observe(
+                this.state,
+                this.format === "gemini" ? body.usageMetadata : body.usage
+            );
+            this.publicSpan?.converted({
+                deliveredUsage: this.convertedObservation?.value,
+                format: this.format,
+                resultClass: result.resultClass,
+                stream: false,
+                upstreamStreaming: false,
+            });
             this.budget.set("writing", serialized.length * 2);
             this.res.statusCode = 200;
             this.res.setHeader("Content-Type", "application/json; charset=utf-8");
             this.bytes = Buffer.byteLength(serialized);
             this.res.end(serialized);
+            if (guard.effective) this.publicSpan?.observeTime("firstDownstreamEffectiveOutputMs");
             this.committed = true;
             this.onCommit();
         } else if (this.format !== "gemini") {
@@ -203,11 +218,25 @@ class GenerationResponseWriter {
                 candidates.push({ finishReason: "SAFETY", index: 0 });
             await this.append(this.convert({ candidates, usageMetadata: guard.usage || undefined }), true);
             if (this.format === "openai") await this.write("data: [DONE]\n\n");
+            this.publicSpan?.converted({
+                deliveredUsage: this.convertedObservation?.value,
+                format: this.format,
+                resultClass: result.resultClass,
+                stream: true,
+                upstreamStreaming: this.upstreamStreaming,
+            });
             this.res.end();
         } else {
             if (this.pending.length) await this.append("", true);
             for (const item of this.pending) await this.write(item);
             this.pending = [];
+            this.publicSpan?.converted({
+                deliveredUsage: guard.usage,
+                format: this.format,
+                resultClass: result.resultClass,
+                stream: true,
+                upstreamStreaming: this.upstreamStreaming,
+            });
             this.res.end();
         }
         this.finished = true;

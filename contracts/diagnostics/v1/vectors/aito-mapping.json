@@ -1,0 +1,384 @@
+[
+  {
+    "id": "local-success",
+    "input": {
+      "legacy": {
+        "requestId": "local-1",
+        "attemptId": "attempt-1",
+        "deliveryOutcome": "success"
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": true,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": "local-1",
+      "attemptId": "attempt-1",
+      "deliveryState": "local_finished",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "requestId": "local-1",
+        "attemptId": "attempt-1",
+        "deliveryOutcome": "success"
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "success-without-finish-evidence",
+    "input": {
+      "legacy": {
+        "deliveryOutcome": "success"
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "deliveryOutcome": "success"
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "cancel-observed",
+    "input": {
+      "legacy": {
+        "deliveryOutcome": "aborted"
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "localCancelObserved": true,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "cancelled",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "deliveryOutcome": "aborted"
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "error-observed",
+    "input": {
+      "legacy": {
+        "deliveryOutcome": "error"
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "localFailureObserved": true,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "failed",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "deliveryOutcome": "error"
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "legacy-error-without-local-evidence",
+    "input": {
+      "legacy": {
+        "deliveryOutcome": "error"
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "deliveryOutcome": "error"
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "preserve-wire-identities-stream-seq",
+    "input": {
+      "legacy": {
+        "request_id": "local-1",
+        "request_attempt_id": "attempt-1",
+        "seq": 99,
+        "schemaVersion": 2
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": "local-1",
+      "attemptId": "attempt-1",
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "request_id": "local-1",
+        "request_attempt_id": "attempt-1",
+        "seq": 99,
+        "schemaVersion": 2
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "sink-drop-is-not-span-drop",
+    "input": {
+      "legacy": {
+        "logsDropped": 42
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": 42,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "logsDropped": 42
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "zero-sink-drop-is-observed-zero",
+    "input": {
+      "legacy": {
+        "logsDropped": 0
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": 0,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "logsDropped": 0
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "wall-duration-not-monotonic",
+    "input": {
+      "legacy": {
+        "firstEffectiveMs": 12
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "firstEffectiveMs": 12
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "browser-duration-source",
+    "input": {
+      "legacy": {
+        "browserDurationMs": 20
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "browserDurationMs": 20
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "parser-complete-not-log-complete",
+    "input": {
+      "legacy": {
+        "observationComplete": true,
+        "recentEvents": [
+          {
+            "seq": 9
+          }
+        ]
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": false,
+      "monotonicMeasurements": {}
+    },
+    "expected": {
+      "requestId": null,
+      "attemptId": null,
+      "deliveryState": "unknown",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "observationComplete": true,
+        "recentEvents": [
+          {
+            "seq": 9
+          }
+        ]
+      },
+      "timing": {
+        "firstUpstreamByteMs": null,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  },
+  {
+    "id": "mixed-legacy-clocks-never-project-to-monotonic",
+    "input": {
+      "legacy": {
+        "requestId": "local-1",
+        "attemptId": "attempt-1",
+        "deliveryOutcome": "success",
+        "firstEffectiveMs": 12,
+        "browserDurationMs": 20,
+        "firstUpstreamByteMs": 99
+      },
+      "allocatedLogSeq": 7,
+      "localFinishObserved": true,
+      "monotonicMeasurements": {
+        "firstUpstreamByteMs": 3
+      }
+    },
+    "expected": {
+      "requestId": "local-1",
+      "attemptId": "attempt-1",
+      "deliveryState": "local_finished",
+      "logSeq": 7,
+      "sinkDroppedTotal": null,
+      "droppedForSpan": null,
+      "legacyPreserved": {
+        "requestId": "local-1",
+        "attemptId": "attempt-1",
+        "deliveryOutcome": "success",
+        "firstEffectiveMs": 12,
+        "browserDurationMs": 20,
+        "firstUpstreamByteMs": 99
+      },
+      "timing": {
+        "firstUpstreamByteMs": 3,
+        "firstEffectiveOutputMs": null,
+        "responseCommitMs": null,
+        "firstDownstreamEffectiveOutputMs": null,
+        "timingSource": "server_monotonic"
+      }
+    }
+  }
+]

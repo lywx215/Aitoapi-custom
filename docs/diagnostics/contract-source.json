@@ -1,0 +1,11 @@
+{
+    "artifactVersion": "1.0.0-rc.1",
+    "baselineCommit": "daeab836eb194d4ff402bc3d645baeba4ccdc96f",
+    "contractPath": "contracts/diagnostics/v1",
+    "diagnosticSchema": "ai-proxy-diagnostics/1",
+    "manifestSha256": "ddb202238cfdaabef1af11575dbfcac788fdbc5a457aea5e72b913afc5b478d4",
+    "sourceCommit": "bb291667f7b6bd7a1dab6f9b7f906b5871d1306c",
+    "sourceRepository": "CLIProxyAPI",
+    "sourceWorktree": "C:/Users/lywx2/.codex/worktrees/622a/CLIProxyAPI",
+    "task": "DIAG-03"
+}

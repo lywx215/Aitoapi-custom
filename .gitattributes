@@ -32,3 +32,4 @@ Dockerfile text eol=lf
 *.woff2 binary
 *.eot binary
 *.otf binary
+contracts/diagnostics/v1/** text eol=lf

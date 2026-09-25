@@ -23,3 +23,6 @@ ui/dist/
 
 # Logs
 *.log
+
+# Frozen external contract: validate with its own schema/vector tooling.
+contracts/diagnostics/v1/

@@ -35,11 +35,12 @@ class LoggingService {
             LoggingService.currentLevel = LoggingService.LEVELS[upperLevel];
             if (upperLevel !== "DEBUG") {
                 for (const logger of LoggingService.diagnosticLoggers) {
-                    clearImmediate(logger.diagnosticFlush);
-                    logger.diagnosticFlush = null;
-                    logger.diagnosticQueue = null;
+                    logger.diagnosticQueue = (logger.diagnosticQueue || []).filter(entry => {
+                        if (entry?.basic) return true;
+                        if (typeof entry !== "string") logger._publicDiagnosticDrop(entry);
+                        return false;
+                    });
                 }
-                LoggingService.diagnosticLoggers.clear();
             }
             for (const listener of LoggingService.levelListeners) {
                 try {
@@ -140,16 +141,17 @@ class LoggingService {
 
     _flushDiagnostics() {
         this.diagnosticFlush = null;
-        if (!LoggingService.isDebugEnabled()) {
-            this.diagnosticQueue = null;
-            LoggingService.diagnosticLoggers.delete(this);
-            return;
-        }
-        for (const line of (this.diagnosticQueue || []).splice(0, 32)) {
+        for (const entry of (this.diagnosticQueue || []).splice(0, 32)) {
+            const legacy = typeof entry === "string";
+            if (!LoggingService.isDebugEnabled() && (legacy || !entry.basic)) {
+                if (!legacy) this._publicDiagnosticDrop(entry);
+                continue;
+            }
             try {
-                console.debug(line);
+                this._writeDiagnosticLine(legacy ? entry : entry.line);
             } catch {
-                this.diagnosticDropped = (this.diagnosticDropped || 0) + 1;
+                if (legacy) this.diagnosticDropped = (this.diagnosticDropped || 0) + 1;
+                else this._publicDiagnosticDrop(entry);
             }
         }
         if (this.diagnosticQueue?.length) this.diagnosticFlush = setImmediate(() => this._flushDiagnostics());
@@ -157,6 +159,29 @@ class LoggingService {
             this.diagnosticQueue = null;
             LoggingService.diagnosticLoggers.delete(this);
         }
+    }
+
+    _writeDiagnosticLine(line) {
+        console.debug(line);
+    }
+
+    _publicDiagnosticDrop(entry) {
+        this.publicDiagnosticDropped = (this.publicDiagnosticDropped || 0) + 1;
+        entry?.onDrop?.();
+    }
+
+    publicDiagnostic(line, basic, onDrop) {
+        const entry = { basic, line, onDrop };
+        this.diagnosticQueue ||= [];
+        if ((!basic && !LoggingService.isDebugEnabled()) || this.diagnosticQueue.length >= (basic ? 128 : 96)) {
+            this._publicDiagnosticDrop(entry);
+            return false;
+        }
+        this.diagnosticQueue.push(entry);
+        // Keep the existing management log schema/cache unchanged.
+        LoggingService.diagnosticLoggers.add(this);
+        if (!this.diagnosticFlush) this.diagnosticFlush = setImmediate(() => this._flushDiagnostics());
+        return true;
     }
 
     constructor(serviceName = "ProxyServer") {

@@ -56,6 +56,9 @@ class ConnectionRegistry extends EventEmitter {
         // Check if there's already a connection for this authIndex
         const existingConnection = this.connectionsByAuth.get(authIndex);
         if (existingConnection && existingConnection !== websocket) {
+            for (const observed of this.diagnosticCalls?.values() || []) {
+                if (observed.connection === existingConnection) observed.call.finish("transport_error");
+            }
             this.logger.warn(
                 `[Server] Duplicate connection detected for authIndex=${authIndex}, closing old connection...`
             );
@@ -116,6 +119,9 @@ class ConnectionRegistry extends EventEmitter {
     }
 
     _removeConnection(websocket) {
+        for (const observed of this.diagnosticCalls?.values() || []) {
+            if (observed.connection === websocket) observed.call.finish("transport_error");
+        }
         const disconnectedAuthIndex = websocket._authIndex;
 
         // Remove from connectionsByAuth if it has an authIndex
@@ -274,6 +280,7 @@ class ConnectionRegistry extends EventEmitter {
                     entry.reason = ["completed", "aborted", "error"].includes(parsedMessage.reason)
                         ? parsedMessage.reason
                         : "error";
+                    this._observeDiagnosticMessage(parsedMessage, messageAuthIndex, websocket);
                     if (require("../utils/LoggingService").isDebugEnabled()) {
                         this.logger.diagnostic?.("INFO", "generation.browser_closed", () => ({
                             ...parsedMessage.diagnostic,
@@ -322,6 +329,7 @@ class ConnectionRegistry extends EventEmitter {
                     );
                     return;
                 }
+                this._observeDiagnosticMessage(parsedMessage, messageAuthIndex, websocket);
                 this._routeMessage(parsedMessage, entry.queue);
             } else {
                 this.logger.warn(`[Server] Received message for unknown or outdated request ID: ${requestId}`);
@@ -346,6 +354,48 @@ class ConnectionRegistry extends EventEmitter {
             requestId,
             waiters: new Set(),
         });
+    }
+
+    observeDiagnosticDispatch(proxyRequest, authIndex, connection, call) {
+        if (!call) return;
+        this.diagnosticCalls ||= new Map();
+        const key = proxyRequest.request_attempt_id || proxyRequest.request_id;
+        this.diagnosticCalls.get(key)?.call.finish("closed_early");
+        const observed = { authIndex, call, connection, requestId: proxyRequest.request_id };
+        this.diagnosticCalls.set(key, observed);
+        call.onSettled = () => {
+            if (this.diagnosticCalls.get(key) === observed) this.diagnosticCalls.delete(key);
+        };
+    }
+
+    _observeDiagnosticMessage(message, authIndex, connection) {
+        const observed = this.diagnosticCalls?.get(message.request_attempt_id || message.request_id);
+        // Additional observation guard only: never change queue/ACK acceptance rules.
+        if (
+            !observed ||
+            observed.authIndex !== authIndex ||
+            observed.connection !== connection ||
+            observed.requestId !== message.request_id
+        )
+            return;
+        const { call } = observed;
+        if (
+            message.event_type === "response_headers" &&
+            Number.isInteger(Number(message.status)) &&
+            Number(message.status) >= 100 &&
+            Number(message.status) <= 599
+        )
+            call.upstreamStatus = Number(message.status);
+        if (message.event_type === "stream_close") call.finish("eof");
+        else if (message.event_type === "error") call.finish("read_error");
+        else if (message.event_type === "attempt_closed")
+            call.finish(
+                message.reason === "aborted"
+                    ? "cancelled"
+                    : message.reason === "completed"
+                      ? "dispatch_finished"
+                      : "read_error"
+            );
     }
 
     waitForGenerationAttempt(attemptId, timeoutMs = 2000, signal = null) {

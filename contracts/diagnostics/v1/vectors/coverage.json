@@ -1,0 +1,621 @@
+[
+  {
+    "id": "continuous-known-full",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "full",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "duplicate-import-no-gap",
+    "input": {
+      "sequences": [
+        1,
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "full",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "debug-never-enabled",
+    "input": {
+      "sequences": [
+        1
+      ],
+      "expectedLastLogSeq": 1,
+      "terminalCount": 1,
+      "debugCapture": "none",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 1
+    },
+    "expected": {
+      "debugCoverage": "none",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "debug-midrequest-disable",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "interrupted",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "debug-midrequest-enable-no-opt-in",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "none",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "none",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "debug-off-on-cannot-be-full",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "interrupted",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "missing-middle",
+    "input": {
+      "sequences": [
+        1,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "missing-start",
+    "input": {
+      "sequences": [
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "tail-no-terminal",
+    "input": {
+      "sequences": [
+        1,
+        2
+      ],
+      "expectedLastLogSeq": null,
+      "terminalCount": 0,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": null
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": true
+    }
+  },
+  {
+    "id": "known-loss-no-terminal",
+    "input": {
+      "sequences": [
+        1
+      ],
+      "expectedLastLogSeq": null,
+      "terminalCount": 0,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 1,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": null
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": true
+    }
+  },
+  {
+    "id": "span-drop",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 1,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "unknown-span-drops",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": null,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "stub-is-loss-of-detail",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 1,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "event-conflict",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": true,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "duplicate-terminal",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 2,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "access-interrupted",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "interrupted",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "capture-unknown",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "unknown",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "export-loss-after-terminal",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": true,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "post-terminal-record",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "debug-none-access-unknown",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "none",
+      "accessCapture": "unknown",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "debug-none-access-none-terminal-contradiction",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "none",
+      "accessCapture": "none",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "debug-on-access-none-terminal-contradiction",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "none",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "terminal-sequence-contradiction",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 2
+    },
+    "expected": {
+      "debugCoverage": "unknown",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "known-loss-precedes-unknown-access",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": 3,
+      "terminalCount": 1,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "unknown",
+      "droppedForSpan": 1,
+      "truncatedEvents": 0,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": 3
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "terminal-stub-proves-existence-not-completeness",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": null,
+      "terminalCount": 0,
+      "debugCapture": "unknown",
+      "accessCapture": "unknown",
+      "droppedForSpan": null,
+      "truncatedEvents": null,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 1,
+      "terminalLogSeq": null
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": false
+    }
+  },
+  {
+    "id": "nonterminal-stub-does-not-prove-terminal",
+    "input": {
+      "sequences": [
+        1,
+        2,
+        3
+      ],
+      "expectedLastLogSeq": null,
+      "terminalCount": 0,
+      "debugCapture": "enabled_throughout",
+      "accessCapture": "enabled_throughout",
+      "droppedForSpan": 0,
+      "truncatedEvents": 1,
+      "conflict": false,
+      "exportKnownLoss": false,
+      "terminalStubCount": 0,
+      "terminalLogSeq": null
+    },
+    "expected": {
+      "debugCoverage": "partial",
+      "terminalMissing": true
+    }
+  }
+]
