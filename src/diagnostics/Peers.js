@@ -28,8 +28,10 @@ function pathValid(path, target = false) {
     if (typeof path !== "string" || (!target && path.length > 256)) return false;
     const value = target && path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
     return (
-        /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?$/.test(value) &&
-        !value.split("/").some(s => s === "." || s === "..")
+        (target
+            ? /^\/(?:[A-Za-z0-9._~!$&'()*+,;=:@-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@-]+)*)?$/
+            : /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?$/
+        ).test(value) && !value.split("/").some(s => s === "." || s === "..")
     );
 }
 const contains = (prefix, path) => prefix === "/" || prefix === path || path.startsWith(`${prefix}/`);

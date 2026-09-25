@@ -73,6 +73,9 @@ function usage(rawUsage, wireProtocol = "gemini", source = "upstream") {
         protocol: wireProtocol,
         raw,
         reasoning: metric(raw.thoughtsTokenCount ?? raw.reasoning_tokens, source),
+        // This producer's OpenAI usage comes from FormatConverter._parseUsage:
+        // completion/output = candidatesTokenCount + thoughtsTokenCount (87 + 13 = 100).
+        // The flag does not authorize this inference for arbitrary remote OpenAI providers.
         reasoningIncludedInOutput:
             wireProtocol.startsWith("openai_") && count(raw.completion_tokens ?? raw.output_tokens) !== null
                 ? true

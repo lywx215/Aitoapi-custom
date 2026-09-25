@@ -122,6 +122,19 @@ async function start({ port = 0, env = process.env, onRecord = null, quiet = fal
             const model = /\/models\/([^:]+)/.exec(message.path)?.[1] || "";
             const scenario =
                 [
+                    "http429",
+                    "http503",
+                    "legacy429",
+                    "network",
+                    "abort",
+                    "timeout",
+                    "invalidutf8",
+                    "resource",
+                    "unknownerror",
+                    "badcandidate",
+                    "badcandidates",
+                    "badparts",
+                    "reasoning",
                     "empty",
                     "blocked",
                     "truncated",
@@ -145,6 +158,24 @@ async function start({ port = 0, env = process.env, onRecord = null, quiet = fal
                         })
                     );
             };
+            const errors = {
+                abort: { error_code: "aborted", status: 504 },
+                http429: { error_code: "http_error", status: 429 },
+                http503: { error_code: "http_error", status: 503 },
+                invalidutf8: { error_code: "invalid_utf8", status: 504 },
+                legacy429: { status: 429 },
+                network: { error_code: "network_error", status: 504 },
+                resource: { error_code: "resource_exhausted", status: 503 },
+                timeout: { error_code: "read_timeout", status: 504 },
+                unknownerror: { error_code: "toString", status: 504 },
+            };
+            if (errors[scenario]) {
+                later(() => {
+                    send({ event_type: "error", ...errors[scenario] });
+                    send({ event_type: "attempt_closed", protocol_version: 2, reason: "error" });
+                }, 2);
+                return;
+            }
             const frame =
                 scenario === "blocked"
                     ? { promptFeedback: { blockReason: "SAFETY" } }
@@ -174,9 +205,12 @@ async function start({ port = 0, env = process.env, onRecord = null, quiet = fal
                 frame.usageMetadata = {
                     candidatesTokenCount: scenario === "zero" ? 0 : 87,
                     promptTokenCount: 3,
-                    thoughtsTokenCount: 0,
-                    totalTokenCount: scenario === "zero" ? 3 : 90,
+                    thoughtsTokenCount: scenario === "reasoning" ? 13 : 0,
+                    totalTokenCount: scenario === "zero" ? 3 : scenario === "reasoning" ? 103 : 90,
                 };
+            if (scenario === "badcandidate") frame.candidates = [null];
+            if (scenario === "badcandidates") frame.candidates = {};
+            if (scenario === "badparts") frame.candidates[0].content.parts = {};
             const stream = message.streaming_mode === "real";
             const sse = message.query_params?.alt === "sse";
             send({
@@ -200,7 +234,7 @@ async function start({ port = 0, env = process.env, onRecord = null, quiet = fal
                     send({ event_type: "stream_close" });
                     send({ event_type: "attempt_closed", protocol_version: 2, reason: "completed" });
                 },
-                scenario === "slow" ? 90 : 2
+                scenario === "slow" ? 90 : scenario === "retry" && message.request_attempt_number === 1 ? 60 : 2
             );
         });
         await once(socket, "open");

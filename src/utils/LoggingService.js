@@ -37,6 +37,7 @@ class LoggingService {
                 for (const logger of LoggingService.diagnosticLoggers) {
                     logger.diagnosticQueue = (logger.diagnosticQueue || []).filter(entry => {
                         if (entry?.basic) return true;
+                        logger._diagnosticDequeued(entry);
                         if (typeof entry !== "string") logger._publicDiagnosticDrop(entry);
                         return false;
                     });
@@ -126,11 +127,12 @@ class LoggingService {
             if (this.logBuffer.length > this.maxBufferSize) this.logBuffer.shift();
             this.diagnosticQueue ||= [];
             const terminal = /\.(attempt_finished|request_finished|browser_closed)$/.test(record.event);
-            if (this.diagnosticQueue.length >= (terminal ? 128 : 96)) {
+            if ((this.legacyQueued || 0) >= (terminal ? 128 : 96)) {
                 this.diagnosticDropped = (this.diagnosticDropped || 0) + 1;
                 return false;
             }
             this.diagnosticQueue.push(line);
+            this.legacyQueued = (this.legacyQueued || 0) + 1;
             LoggingService.diagnosticLoggers.add(this);
             if (!this.diagnosticFlush) this.diagnosticFlush = setImmediate(() => this._flushDiagnostics());
             return true;
@@ -142,6 +144,7 @@ class LoggingService {
     _flushDiagnostics() {
         this.diagnosticFlush = null;
         for (const entry of (this.diagnosticQueue || []).splice(0, 32)) {
+            this._diagnosticDequeued(entry);
             const legacy = typeof entry === "string";
             if (!LoggingService.isDebugEnabled() && (legacy || !entry.basic)) {
                 if (!legacy) this._publicDiagnosticDrop(entry);
@@ -165,6 +168,11 @@ class LoggingService {
         console.debug(line);
     }
 
+    _diagnosticDequeued(entry) {
+        const counter = typeof entry === "string" ? "legacyQueued" : entry.basic ? "basicQueued" : "debugQueued";
+        this[counter] = Math.max(0, (this[counter] || 0) - 1);
+    }
+
     _publicDiagnosticDrop(entry) {
         this.publicDiagnosticDropped = (this.publicDiagnosticDropped || 0) + 1;
         entry?.onDrop?.();
@@ -173,11 +181,15 @@ class LoggingService {
     publicDiagnostic(line, basic, onDrop) {
         const entry = { basic, line, onDrop };
         this.diagnosticQueue ||= [];
-        if ((!basic && !LoggingService.isDebugEnabled()) || this.diagnosticQueue.length >= (basic ? 128 : 96)) {
+        // One queue, independent quotas: legacy 96/128, public debug 96,
+        // public basic 128. Total <=352; public traffic cannot consume legacy reserve.
+        const counter = basic ? "basicQueued" : "debugQueued";
+        if ((!basic && !LoggingService.isDebugEnabled()) || (this[counter] || 0) >= (basic ? 128 : 96)) {
             this._publicDiagnosticDrop(entry);
             return false;
         }
         this.diagnosticQueue.push(entry);
+        this[counter] = (this[counter] || 0) + 1;
         // Keep the existing management log schema/cache unchanged.
         LoggingService.diagnosticLoggers.add(this);
         if (!this.diagnosticFlush) this.diagnosticFlush = setImmediate(() => this._flushDiagnostics());

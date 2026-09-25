@@ -104,13 +104,14 @@ function outgoing({
     callSpanId,
     flags,
     tracestate,
+    preserveCase = false,
 }) {
     const output = Object.create(null);
     for (const [name, value] of headers) {
         const key = name.toLowerCase();
         if (key.startsWith("x-diag-")) continue;
         if (!response && (allowed || diagnosticOwned) && /^(traceparent|tracestate)$/.test(key)) continue;
-        (output[key] ||= []).push(value);
+        (output[preserveCase ? name : key] ||= []).push(value);
     }
     if (response) {
         output["x-diag-request-id"] = [requestId];

@@ -1378,8 +1378,8 @@ class RequestHandler {
 
     _startTrackedRequest(requestId, req, meta = {}) {
         const span = Diagnostics.get(req);
-        span?.bind(requestId);
-        if (span) {
+        if (span && req.res && !req.res.destroyed && !req.res.writableEnded) {
+            span.bind(requestId);
             this.diagnosticRequests ||= new Map();
             this.diagnosticRequests.set(requestId, span);
             req.res.once("close", () => this.diagnosticRequests.delete(requestId));

@@ -1,5 +1,7 @@
 # DIAG-03 交付记录：待审核
 
+此页保留初次提交 `827a37bd463d258663d31d60e0802a356197677c` 的实现和验证台账。R1 修订后的准确行为、意见处置及新增测试以 [DIAG-03-R1-disposition.zh-CN.md](DIAG-03-R1-disposition.zh-CN.md) 为准；下方双实例启动方式仍适用。
+
 项目：Aitoapi-custom。worktree：`C:/Users/lywx2/.codex/worktrees/ca98/Aitoapi-custom`。分支：`codex/diag-03-aito-diagnostics`。基线：`daeab836eb194d4ff402bc3d645baeba4ccdc96f`。最终提交的完整 SHA 由本次交付消息提供（避免文档自引用提交哈希）。
 
 冻结契约来源为只读 CLIProxyAPI worktree 的 `bb291667f7b6bd7a1dab6f9b7f906b5871d1306c`，制品 `1.0.0-rc.1`，schema `ai-proxy-diagnostics/1`。`SHA256SUMS` 原始字节 SHA-256：`ddb202238cfdaabef1af11575dbfcac788fdbc5a457aea5e72b913afc5b478d4`。详见 [contract-source.json](contract-source.json)。72 个清单文件及清单本身逐字节纳入；LF 属性和格式化忽略规则防止改写。Python 仅用于离线 QA；服务运行时不导入契约 oracle 或其他仓库。

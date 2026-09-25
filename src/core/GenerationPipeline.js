@@ -246,7 +246,8 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                         const previousEffective = guard.effective;
                         guard.observe(frame.parsed);
                         publicSpan?.observeFrame(attemptId, frame.parsed);
-                        if (!previousEffective && guard.effective) publicSpan?.observeTime("firstEffectiveOutputMs");
+                        if (!previousEffective && guard.effective)
+                            publicSpan?.observeTime("firstEffectiveOutputMs", attemptId);
                         if (!previousEffective && guard.effective)
                             diagnostics?.emit("first_effective_output", {
                                 attemptId,
@@ -367,7 +368,7 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                         responseResult = guard.finish();
                         break;
                     } else if (message.event_type === "chunk") {
-                        publicSpan?.observeTime("firstUpstreamByteMs");
+                        publicSpan?.observeTime("firstUpstreamByteMs", attemptId);
                         if (!parser || typeof message.data !== "string")
                             throw new GenerationError("invalid_upstream_response");
                         if (diagnostics?.active) {

@@ -380,15 +380,25 @@ class ConnectionRegistry extends EventEmitter {
             return;
         const { call } = observed;
         if (
-            message.event_type === "response_headers" &&
+            (message.event_type === "response_headers" ||
+                (message.event_type === "error" && (!message.error_code || message.error_code === "http_error"))) &&
             Number.isInteger(Number(message.status)) &&
             Number(message.status) >= 100 &&
             Number(message.status) <= 599
         )
             call.upstreamStatus = Number(message.status);
         if (message.event_type === "stream_close") call.finish("eof");
-        else if (message.event_type === "error") call.finish("read_error");
-        else if (message.event_type === "attempt_closed")
+        else if (message.event_type === "error") {
+            // Browser http_error may cancel the response body; it is not EOF.
+            // Its fallback status 504 for network/abort errors is not an HTTP observation.
+            const reasons = {
+                aborted: "cancelled",
+                invalid_utf8: "read_error",
+                network_error: "transport_error",
+                read_timeout: "read_error",
+            };
+            call.finish(Object.hasOwn(reasons, message.error_code) ? reasons[message.error_code] : "unknown");
+        } else if (message.event_type === "attempt_closed")
             call.finish(
                 message.reason === "aborted"
                     ? "cancelled"

@@ -154,9 +154,12 @@ class ServerSpan extends Span {
         });
     }
 
-    observeTime(key) {
-        if (this.debugActive && this.measurements[key] === undefined)
-            this.measurements[key] = performance.now() - this.started;
+    observeTime(key, attemptId) {
+        if (!this.debugActive) return;
+        // All timings use server-span start as their origin. Upstream observations
+        // belong only to the named attempt; retries must never inherit an earlier value.
+        const measurements = attemptId ? this.attempts.get(attemptId)?.measurements : this.measurements;
+        if (measurements && measurements[key] === undefined) measurements[key] = performance.now() - this.started;
     }
 
     startCall(attempt = {}, callKind = "browser_dispatch", peer = null) {
@@ -204,20 +207,33 @@ class ServerSpan extends Span {
 
     startAttempt(attemptId) {
         if (this.debugActive)
-            this.attempts.set(attemptId, { ordinaryTextUtf8Bytes: 0, started: performance.now(), thoughtUtf8Bytes: 0 });
+            this.attempts.set(attemptId, {
+                measurements: {},
+                ordinaryTextUtf8Bytes: 0,
+                started: performance.now(),
+                thoughtUtf8Bytes: 0,
+            });
     }
 
     observeFrame(attemptId, parsed) {
         if (!this.debugActive) return;
         const attempt = this.attempts.get(attemptId);
-        if (!attempt) return;
-        for (const candidate of parsed?.candidates || [])
-            for (const part of candidate.content?.parts || []) {
-                if (typeof part.text === "string")
-                    attempt[part.thought === true ? "thoughtUtf8Bytes" : "ordinaryTextUtf8Bytes"] += Buffer.byteLength(
-                        part.text
-                    );
+        if (!attempt || attempt.ordinaryTextUtf8Bytes === null) return;
+        try {
+            if (!Array.isArray(parsed?.candidates)) return;
+            for (const candidate of parsed.candidates) {
+                if (!candidate || !Array.isArray(candidate.content?.parts)) continue;
+                for (const part of candidate.content.parts) {
+                    if (part && typeof part.text === "string")
+                        attempt[part.thought === true ? "thoughtUtf8Bytes" : "ordinaryTextUtf8Bytes"] +=
+                            Buffer.byteLength(part.text);
+                }
             }
+        } catch {
+            // Observation must not change guard/transport behavior, even for a hostile accessor.
+            attempt.ordinaryTextUtf8Bytes = null;
+            attempt.thoughtUtf8Bytes = null;
+        }
     }
 
     attemptFinished(fields, rawUsage) {
@@ -233,7 +249,7 @@ class ServerSpan extends Span {
             output: Projection.output(fields, observed),
             parserFinishOk: fields.parserFinishOk ?? null,
             terminalSeen: fields.terminalSeen ?? null,
-            timing: Projection.timing(this.measurements),
+            timing: Projection.timing({ ...this.measurements, ...observed?.measurements }),
             totalMs: observed ? performance.now() - observed.started : null,
             usage: Projection.usage(rawUsage),
         };
@@ -371,8 +387,9 @@ class Diagnostics {
                 if (provided) {
                     if (Array.isArray(provided)) {
                         const clean = [];
-                        for (let i = 0; i < provided.length; i += 2)
-                            if (!/^x-diag-/i.test(provided[i])) clean.push(provided[i], provided[i + 1]);
+                        const flat = Array.isArray(provided[0]) ? provided.flat() : provided;
+                        for (let i = 0; i < flat.length; i += 2)
+                            if (!/^x-diag-/i.test(flat[i])) clean.push(flat[i], flat[i + 1]);
                         args[position] = clean;
                     } else
                         args[position] = Object.fromEntries(
@@ -391,12 +408,11 @@ class Diagnostics {
                     ? req.route.path
                     : null;
             res.once("finish", () => span.finish(res, route(), "finished"));
-            res.once("error", () => span.finish(res, route(), "error"));
             res.once("close", () =>
                 span.finish(
                     res,
                     route(),
-                    res.writableFinished ? "finished" : res.__generationDestroyed ? "error" : "client_cancel"
+                    res.writableFinished ? "finished" : res.__generationDestroyed ? "error" : "unknown"
                 )
             );
             next();

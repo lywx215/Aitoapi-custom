@@ -103,6 +103,16 @@ async function pipeline() {
                     assert.equal(terminal.data.deliveryState, "local_finished");
                     assert.equal(terminal.data.callCount, ["empty", "retry"].includes(scenario) ? 2 : 1);
                     const attempts = r.own.filter(e => e.event === "upstream.attempt_finished");
+                    if (scenario === "retry") {
+                        assert.equal(attempts[0].data.timing.firstEffectiveOutputMs, null);
+                        assert(
+                            attempts[1].data.timing.firstUpstreamByteMs > attempts[0].data.timing.firstUpstreamByteMs
+                        );
+                        assert(
+                            attempts[1].data.timing.firstEffectiveOutputMs >=
+                                attempts[1].data.timing.firstUpstreamByteMs
+                        );
+                    }
                     assert.equal(
                         attempts.at(-1).data.resultClass,
                         scenario === "empty"
@@ -115,12 +125,17 @@ async function pipeline() {
                     );
                     if (scenario === "usage87") assert.equal(attempts[0].data.usage.candidate.value, 87);
                     if (scenario === "zero") assert.equal(attempts[0].data.usage.candidate.value, 0);
-                    if (scenario === "missing")
+                    if (scenario === "missing") {
                         assert.deepEqual(attempts[0].data.usage.candidate, {
                             present: false,
                             source: "unknown",
                             value: null,
                         });
+                        if (format === "response_api") {
+                            const delivered = r.own.find(e => e.event === "response.converted").data.deliveredUsage;
+                            assert.deepEqual(delivered.outputTotal, { present: true, source: "converted", value: 0 });
+                        }
+                    }
                     complete(r.own);
                     checks++;
                 }
@@ -130,6 +145,94 @@ async function pipeline() {
             assert.equal(pseudo.response.status, 200);
             assert.equal(pseudo.own.find(e => e.event === "response.converted").data.deliveryMode, "pseudo_stream");
             complete(pseudo.own);
+            checks++;
+        }
+        for (const format of ["gemini", "openai", "response_api", "claude"])
+            for (const mode of ["stream", "nonstream", "pseudo_stream"]) {
+                const r = await request(
+                    format,
+                    mode === "pseudo_stream" ? "reasoning-fake" : "reasoning",
+                    mode !== "nonstream"
+                );
+                assert.equal(r.response.status, 200);
+                const converted = r.own.find(e => e.event === "response.converted").data;
+                assert.equal(converted.deliveryMode, mode);
+                assert.equal(converted.upstreamUsage.candidate.value, 87);
+                assert.equal(converted.upstreamUsage.reasoning.value, 13);
+                const delivered = converted.deliveredUsage;
+                const wire =
+                    mode === "nonstream"
+                        ? [JSON.parse(r.text)]
+                        : r.text
+                              .split("\n")
+                              .filter(line => line.startsWith("data: ") && !line.includes("[DONE]"))
+                              .map(line => JSON.parse(line.slice(6)));
+                if (format === "gemini") {
+                    assert.equal(delivered.candidate.value, 87);
+                    assert.equal(delivered.reasoning.value, 13);
+                    assert.equal(delivered.outputTotal.value, null);
+                    assert(
+                        wire.some(
+                            frame =>
+                                frame.usageMetadata?.candidatesTokenCount === 87 &&
+                                frame.usageMetadata?.thoughtsTokenCount === 13
+                        )
+                    );
+                } else {
+                    assert.equal(delivered.outputTotal.value, 100);
+                    if (format === "claude") {
+                        assert.equal(delivered.reasoning.value, null);
+                        assert(wire.some(frame => frame.usage?.output_tokens === 100));
+                    } else {
+                        assert.equal(delivered.reasoning.value, 13);
+                        assert.equal(delivered.reasoningIncludedInOutput, true);
+                        assert.equal(delivered.outputTotal.value - delivered.reasoning.value, 87);
+                        assert(
+                            wire.some(frame => {
+                                const usage = frame.usage || frame.response?.usage;
+                                return format === "openai"
+                                    ? usage?.completion_tokens === 100 &&
+                                          usage?.completion_tokens_details?.reasoning_tokens === 13
+                                    : usage?.output_tokens === 100 &&
+                                          usage?.output_tokens_details?.reasoning_tokens === 13;
+                            })
+                        );
+                    }
+                }
+                complete(r.own);
+                checks++;
+            }
+        for (const [scenario, status, reason] of [
+            ["http429", 429, "unknown"],
+            ["http503", 503, "unknown"],
+            ["legacy429", 429, "unknown"],
+            ["network", null, "transport_error"],
+            ["abort", null, "cancelled"],
+            ["timeout", null, "read_error"],
+            ["invalidutf8", null, "read_error"],
+            ["resource", null, "unknown"],
+            ["unknownerror", null, "unknown"],
+        ]) {
+            const r = await request("openai", scenario, false);
+            const calls = r.own.filter(record => record.event === "diag.call");
+            assert(calls.length > 0);
+            assert(
+                calls.every(record => record.data.upstreamStatus === status && record.data.endReason === reason),
+                scenario
+            );
+            complete(r.own);
+            checks++;
+        }
+        for (const scenario of ["badcandidate", "badcandidates", "badparts"]) {
+            const debug = await request("openai", scenario, false);
+            LoggingService.setLevel("INFO");
+            const standard = await request("openai", scenario, false);
+            LoggingService.setLevel("DEBUG");
+            assert.equal(debug.response.status, standard.response.status);
+            assert.equal(debug.text, standard.text);
+            assert.equal(debug.response.status, 502);
+            assert(debug.text.includes("invalid_upstream_response"));
+            assert(standard.own.every(record => record.recordKind === "basic"));
             checks++;
         }
         const concurrent = await Promise.all(
@@ -192,7 +295,11 @@ async function pipeline() {
         await new Promise(resolve => setTimeout(resolve, 15));
         pending.destroy();
         await new Promise(resolve => setTimeout(resolve, 110));
-        assert(records.some(r => r.event === "diag.server" && r.data.deliveryState === "cancelled"));
+        assert(
+            records.some(
+                r => r.event === "diag.server" && r.data.endReason === "unknown" && r.data.deliveryState === "unknown"
+            )
+        );
         checks++;
         assert(!JSON.stringify(records).includes("FORBIDDEN_INPUT"));
         assert(f.dispatches.every(p => !Object.hasOwn(p, "traceId") && !Object.hasOwn(p, "publicSpan")));
@@ -219,7 +326,8 @@ async function sink() {
     const span = new Diagnostics.ServerSpan(diag, Headers.extract({ headers: [] }));
     span.startAttempt("a");
     for (let i = 0; i < 110; i++) span.attemptFinished({ attemptId: "a", attemptNo: 1, resultClass: "empty" }, null);
-    assert(logger.diagnosticQueue.length <= 96);
+    assert.equal(logger.debugQueued, 96);
+    assert(logger.diagnosticQueue.length <= 224); // Independent public DEBUG/basic quotas.
     LoggingService.setLevel("INFO");
     span.finish({ headersSent: true, statusCode: 502 }, null, "finished");
     logger._flushDiagnostics();

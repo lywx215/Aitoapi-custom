@@ -209,7 +209,6 @@ class GenerationResponseWriter {
             this.res.setHeader("Content-Type", "application/json; charset=utf-8");
             this.bytes = Buffer.byteLength(serialized);
             this.res.end(serialized);
-            if (guard.effective) this.publicSpan?.observeTime("firstDownstreamEffectiveOutputMs");
             this.committed = true;
             this.onCommit();
         } else if (this.format !== "gemini") {

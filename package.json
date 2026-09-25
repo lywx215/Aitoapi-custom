@@ -13,7 +13,7 @@
         "preview:ui": "vite preview",
         "start": "cross-env NODE_ENV=production node main.js",
         "quick-start": "cross-env NODE_ENV=production node main.js",
-        "test:diagnostics": "node scripts/tests/diagnosticsVectors.test.js && node scripts/tests/diagnosticsIngress.test.js && node scripts/tests/diagnosticsRuntime.test.js && node scripts/tests/diagnosticsProcesses.test.js",
+        "test:diagnostics": "node scripts/tests/diagnosticsVectors.test.js && node scripts/tests/diagnosticsIngress.test.js && node scripts/tests/diagnosticsRuntime.test.js && node scripts/tests/diagnosticsProcesses.test.js && node scripts/tests/diagnosticsRevision.test.js",
         "diagnostics:isolated": "node scripts/diagnostics/isolatedServer.js",
         "test:routing": "node scripts/tests/requestRouting.test.js",
         "test:background-wakeup": "node scripts/tests/backgroundWakeup.test.js",
