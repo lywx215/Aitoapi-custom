@@ -275,6 +275,7 @@ class CredentialTestService {
                 model: MODEL,
                 onProgress: event => {
                     row.stage = event.stage;
+                    row.stageDeadlineAt = event.stageDeadlineAt || null;
                     // A persistence failure must prevent the later enable even though
                     // ManagementVerifier deliberately ignores observer exceptions.
                     this._persist();

@@ -18,6 +18,8 @@ class ManagementVerifier {
         // Trusted in-process test seam; never populated from API request data.
         this.adapterFactory = options.adapterFactory || (() => new VerifierBrowserAdapter(staticConfig));
         this.timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, options.timeoutMs || MAX_TIMEOUT_MS));
+        this.sessionTimeoutMs = Math.max(1, Math.min(60000, options.sessionTimeoutMs || 60000));
+        this.connectionTimeoutMs = Math.max(1, Math.min(60000, options.connectionTimeoutMs || 60000));
         this.pollMs = Math.max(1, options.pollMs || 250);
         this.closeTimeoutMs = Math.max(1, Math.min(5000, options.closeTimeoutMs || 5000));
         this.tail = Promise.resolve();
@@ -94,6 +96,7 @@ class ManagementVerifier {
             if (controller.signal.aborted) throw abortError(controller.signal);
             diagnostic("dequeued", { queueWaitMs: started === null ? undefined : Date.now() - started });
             return this.execute({
+                abort: reason => controller.abort(reason),
                 credentials: candidate,
                 diagnostic,
                 includeResponseText,
@@ -126,6 +129,7 @@ class ManagementVerifier {
     }
 
     async execute({
+        abort,
         index,
         credentials,
         mode,
@@ -138,13 +142,13 @@ class ManagementVerifier {
     }) {
         let adapter;
         const transport = new VerifierTransport({ index, model, requestId });
-        const progress = async (stage, value) => {
+        const progress = async (stage, value, details = {}) => {
             diagnostic(stage);
             if (onProgress) {
                 // Observers cannot replace a verification result or leak their own exceptions.
                 await abortable(
                     Promise.resolve()
-                        .then(() => onProgress({ progress: value, stage }))
+                        .then(() => onProgress({ progress: value, stage, ...details }))
                         .catch(() => {}),
                     signal
                 );
@@ -167,6 +171,13 @@ class ManagementVerifier {
         };
         let primaryError;
         let verificationResult;
+        let readinessTimer;
+        const readinessPhase = async (stage, timeoutMs, errorStage) => {
+            clearTimeout(readinessTimer);
+            const stageDeadlineAt = new Date(Date.now() + timeoutMs).toISOString();
+            readinessTimer = setTimeout(() => abort(new VerificationError(errorStage)), timeoutMs);
+            await progress(stage, stage === "checking_session" ? 25 : 35, { stageDeadlineAt });
+        };
         try {
             await progress("initializing", 10);
             const endpoint = await transport.listen(signal);
@@ -174,15 +185,23 @@ class ManagementVerifier {
             adapter = this.adapterFactory();
             await abortable(adapter.start({ credentials, endpoint, index, signal }), signal);
             diagnostic("browser_ready", { browserReady: true });
-            await progress("checking_session", 25);
+            await readinessPhase("checking_session", this.sessionTimeoutMs, "identity_unconfirmed");
             let connected = false;
             transport.connected.then(() => {
                 connected = true;
             });
             let identity;
+            let confirmedIdentity;
             let lastReadiness;
             while (!signal.aborted) {
                 identity = checkIdentity(await abortable(adapter.inspect(), signal));
+                if (confirmedIdentity && !identity) throw new VerificationError("identity_unconfirmed");
+                if (confirmedIdentity && identity !== confirmedIdentity)
+                    throw new VerificationError("identity_mismatch");
+                if (identity && !confirmedIdentity) {
+                    confirmedIdentity = identity;
+                    if (!connected) await readinessPhase("connecting", this.connectionTimeoutMs, "connection_timeout");
+                }
                 const readiness = `${Boolean(identity)}:${connected}`;
                 if (readiness !== lastReadiness) {
                     diagnostic(identity ? "identity_confirmed" : "identity_pending", { wsReady: connected });
@@ -197,6 +216,7 @@ class ManagementVerifier {
                 if (adapter.wake) await abortable(adapter.wake(), signal);
                 await delay(this.pollMs, signal);
             }
+            clearTimeout(readinessTimer);
             if (signal.aborted) throw abortError(signal);
             let upstreamStatus = null;
             if (mode === "model") {
@@ -240,6 +260,7 @@ class ManagementVerifier {
         } catch (error) {
             primaryError = error;
         } finally {
+            clearTimeout(readinessTimer);
             const results = await Promise.allSettled([
                 Promise.resolve().then(() => transport.close()),
                 Promise.resolve().then(() => adapter?.close()),

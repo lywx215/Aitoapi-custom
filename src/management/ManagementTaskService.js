@@ -474,6 +474,7 @@ class ManagementTaskService {
                 "region_restricted",
                 "initialization_failed",
                 "connection_closed",
+                "connection_timeout",
                 "protocol_mismatch",
                 "empty_response",
                 "cleanup_failed",

@@ -143,7 +143,9 @@ function harness(options = {}) {
                 };
             },
             closeTimeoutMs: 100,
+            connectionTimeoutMs: options.connectionTimeoutMs,
             pollMs: 2,
+            sessionTimeoutMs: options.sessionTimeoutMs,
             timeoutMs: options.timeoutMs || 1000,
         },
     };
@@ -301,6 +303,54 @@ test("identity is rechecked after generation, including candidates without accou
     await assert.rejects(h.verifier.verify({ credentials: { cookies: alpha.cookies, origins: [] }, index: 3 }), {
         stage: "identity_mismatch",
     });
+    await h.verifier.close();
+});
+
+test("account confirmation has a separate deadline even when inspect never settles", async () => {
+    for (const inspect of [() => ({}), never]) {
+        const h = harness({ inspect, sessionTimeoutMs: 30 });
+        const events = [];
+        await assert.rejects(
+            h.verifier.verify({ credentials: alpha, index: 3, onProgress: event => events.push(event) }),
+            {
+                stage: "identity_unconfirmed",
+            }
+        );
+        await h.verifier.tail;
+        assert(h.records[0].closed);
+        assert.equal(h.records[0].request, undefined);
+        assert(Number.isFinite(Date.parse(events.find(event => event.stage === "checking_session").stageDeadlineAt)));
+        await h.verifier.close();
+    }
+});
+
+test("confirmed identity waiting for WebSocket reports connecting and connection_timeout", async () => {
+    const h = harness({ connectionTimeoutMs: 30, start: async () => {} });
+    const events = [];
+    await assert.rejects(h.verifier.verify({ credentials: alpha, index: 3, onProgress: event => events.push(event) }), {
+        stage: "connection_timeout",
+    });
+    assert.deepEqual(
+        events.map(event => event.stage),
+        ["initializing", "checking_session", "connecting"]
+    );
+    assert(Number.isFinite(Date.parse(events[2].stageDeadlineAt)));
+    await h.verifier.tail;
+    assert(h.records[0].closed);
+    assert.equal(h.records[0].request, undefined);
+    await h.verifier.close();
+});
+
+test("readiness deadline is cleared before a slower successful model response", async () => {
+    const h = harness({
+        respond: async (socket, request) => {
+            await pause(100);
+            sendResponse(socket, request);
+        },
+        sessionTimeoutMs: 50,
+    });
+    const result = await h.verifier.verify({ credentials: alpha, index: 3 });
+    assert.equal(result.stage, "model_verified");
     await h.verifier.close();
 });
 

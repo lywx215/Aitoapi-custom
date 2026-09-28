@@ -248,7 +248,12 @@ async function browserTests() {
                     });
                     continue;
                 }
-                Object.assign(row, { stage: "generating", state: "running" });
+                Object.assign(row, {
+                    stage: "connecting",
+                    stageDeadlineAt: new Date(Date.now() + 60000).toISOString(),
+                    startedAt: new Date(Date.now() - 3000).toISOString(),
+                    state: "running",
+                });
                 tests.push(row.index);
                 await new Promise(resolve => setTimeout(resolve, credentialDelay));
                 account.isDisabled = false;
@@ -585,6 +590,18 @@ async function browserTests() {
         credentialDelay = 1800;
         await row.getByRole("button", { exact: true, name: "凭证测试" }).click();
         await check(() => tests.length === 1, "single credential test starts");
+        await check(
+            async () => (await page.locator(".credential-tests").innerText()).includes("连接模型服务"),
+            "connection phase is visible"
+        );
+        await check(
+            async () => (await page.locator(".credential-tests").innerText()).includes("已用时"),
+            "running elapsed time is visible"
+        );
+        await check(
+            async () => (await page.locator(".credential-tests").innerText()).includes("本阶段最多再等待"),
+            "stage deadline is visible"
+        );
         await page.reload();
         await check(
             async () => (await page.locator(".credential-tests").innerText()).includes("gemini-3.8-flash"),

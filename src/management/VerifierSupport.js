@@ -3,6 +3,7 @@ const messages = {
     cleanup_failed: "Isolated verification resources could not be closed.",
     closed: "The verifier is closed.",
     connection_closed: "The isolated verification connection closed.",
+    connection_timeout: "The isolated verification WebSocket did not connect before its deadline.",
     empty_response: "The target model did not return a completed nonempty response.",
     identity_mismatch: "Current session identity does not match the candidate.",
     identity_unconfirmed: "Current session identity could not be confirmed.",

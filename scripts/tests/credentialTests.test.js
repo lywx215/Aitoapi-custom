@@ -123,6 +123,43 @@ test("verification failures preserve disabled state and continue remaining accou
     assert.equal(currentRun.results[6].state, "success");
 });
 
+test("real verifier readiness timeout records its deadline and advances to the next selected account", async () => {
+    const inspecting = deferred();
+    const started = [];
+    const f = await fixture([{ disabled: true }, { disabled: true }]);
+    f.system.managementVerifierOptions = {
+        adapterFactory: () => ({
+            async close() {},
+            async inspect() {
+                inspecting.resolve();
+                return started.length === 1 ? {} : { stage: "terms_required" };
+            },
+            async start(args) {
+                started.push(args.index);
+            },
+        }),
+        pollMs: 2,
+        sessionTimeoutMs: 30,
+        timeoutMs: 1000,
+    };
+    f.service.verifier = new ManagementVerifier(f.system);
+    f.service.start({ clientRequestId: "readiness-then-next", indices: f.indices });
+    await inspecting.promise;
+    const active = f.service.snapshot().currentRun.results[0];
+    assert.equal(active.stage, "checking_session");
+    assert(Number.isFinite(Date.parse(active.stageDeadlineAt)));
+    await f.service.runPromise;
+    const results = f.service.snapshot().currentRun.results;
+    assert.deepEqual(started, f.indices);
+    assert.deepEqual(
+        results.map(row => row.errorCode),
+        ["identity_unconfirmed", "terms_required"]
+    );
+    assert(results.every(row => row.state === "failed" && !row.modelVerified));
+    assert(f.indices.every(index => f.system.authSource.store.getMetadata(index).disabled));
+    await f.service.close();
+});
+
 test("reject success without target attribution or actual nonempty model reply", async () => {
     for (const change of [
         { authIndex: 999 },

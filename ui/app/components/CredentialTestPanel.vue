@@ -28,9 +28,19 @@
                 <el-tag :type="row.state === 'success' ? 'success' : row.state === 'failed' ? 'danger' : 'info'">
                     {{ t(`ctStage_${row.state === "running" ? row.stage : row.state}`) }}
                 </el-tag>
+                <span v-if="row.state === 'running' && row.startedAt">
+                    {{ t("ctElapsed", { seconds: elapsedSeconds(row.startedAt) }) }}
+                </span>
                 <span v-if="row.durationMs !== undefined">{{ (row.durationMs / 1000).toFixed(1) }} s</span>
                 <span v-if="row.upstreamStatus">HTTP {{ row.upstreamStatus }}</span>
             </div>
+            <p v-if="row.state === 'running' && row.stageDeadlineAt">
+                {{
+                    remainingSeconds(row.stageDeadlineAt) > 0
+                        ? t("ctStageRemaining", { seconds: remainingSeconds(row.stageDeadlineAt) })
+                        : t("ctAwaitingResult")
+                }}
+            </p>
             <p v-if="row.modelVerified">{{ t(row.enabled ? "ctVerifiedEnabled" : "ctVerified") }}</p>
             <p v-if="row.errorCode">{{ t(`ctError_${row.errorCode}`) }}</p>
             <p v-if="row.snapshotChanged">{{ t("ctSnapshotChanged") }}</p>
@@ -59,6 +69,9 @@ const actionError = ref("");
 const actionNotice = ref("");
 const initializing = ref(true);
 const submitting = ref(false);
+const clockNow = ref(Date.now());
+const elapsedSeconds = startedAt => Math.max(0, Math.floor((clockNow.value - Date.parse(startedAt)) / 1000));
+const remainingSeconds = deadlineAt => Math.max(0, Math.ceil((Date.parse(deadlineAt) - clockNow.value) / 1000));
 const running = computed(() => run.value?.status === "running");
 const done = computed(
     () => (run.value?.results || []).filter(row => !["pending", "running"].includes(row.state)).length
@@ -71,6 +84,7 @@ watch(
 );
 let alive = true;
 let timer;
+let clockTimer;
 let reading = null;
 let completedRun = null;
 const pendingKey = "aitoapi-credential-test-submission";
@@ -180,10 +194,16 @@ const stop = async () => {
         await fetchState();
     }
 };
-onMounted(fetchState);
+onMounted(() => {
+    clockTimer = setInterval(() => {
+        clockNow.value = Date.now();
+    }, 1000);
+    fetchState();
+});
 onBeforeUnmount(() => {
     alive = false;
     clearTimeout(timer);
+    clearInterval(clockTimer);
     unsubscribe();
 });
 defineExpose({ start });

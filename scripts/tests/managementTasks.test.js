@@ -216,7 +216,13 @@ test("manual disable and credential replacement win the double-version CAS", asy
 });
 
 test("public failed tasks retain actionable verifier stages without credential details", async t => {
-    for (const stage of ["terms_required", "initialization_failed", "empty_response", "connection_closed"]) {
+    for (const stage of [
+        "terms_required",
+        "initialization_failed",
+        "empty_response",
+        "connection_closed",
+        "connection_timeout",
+    ]) {
         const f = fixture(t, async input => {
             throw Object.assign(new Error("fixture-private-detail"), {
                 authIndex: input.index,
