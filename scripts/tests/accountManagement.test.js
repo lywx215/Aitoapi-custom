@@ -197,7 +197,79 @@ async function browserTests() {
     reset();
     let changes = [];
     const tests = [];
+    let credentialRun = null;
+    let credentialDelay = 30;
+    let credentialRuns = 0;
+    let loseCredentialResponse = false;
+    let failCredentialReads = false;
+    let replyCredentialReused = false;
+    const credentialReceipts = new Map();
+    app.get("/api/account-credential-tests", (req, res) => {
+        if (failCredentialReads) return res.status(503).json({ code: "INTERNAL_ERROR" });
+        const admitted = credentialReceipts.get(req.query.clientRequestId);
+        return res.json({
+            admission: admitted ? { runId: admitted } : null,
+            currentRun: credentialRun,
+            lastCompleted: null,
+        });
+    });
+    app.post("/api/account-credential-tests/runs", (req, res) => {
+        assert.match(req.body.clientRequestId, /^[a-zA-Z0-9_-]{8,128}$/);
+        const known = credentialReceipts.get(req.body.clientRequestId);
+        if (known && loseCredentialResponse) return req.socket.destroy();
+        if (known || replyCredentialReused)
+            return res.status(202).json({ reused: true, runId: known || credentialRun.runId });
+        if (credentialRun?.status === "running") return res.status(409).json({ code: "ACCOUNT_BUSY" });
+        const run = {
+            model: "gemini-3.8-flash",
+            results: req.body.indices.map(index => ({
+                index,
+                name: accounts.find(account => account.index === index)?.name,
+                state: "pending",
+            })),
+            runId: `fixture-${++credentialRuns}`,
+            status: "running",
+        };
+        credentialRun = run;
+        credentialReceipts.set(req.body.clientRequestId, run.runId);
+        if (loseCredentialResponse) req.socket.destroy();
+        else res.status(202).json({ runId: run.runId });
+        void (async () => {
+            for (const row of run.results) {
+                if (run.stopRequested) {
+                    row.state = "unexecuted";
+                    continue;
+                }
+                const account = accounts.find(item => item.index === row.index);
+                if (!account || account.isInvalid || account.isDuplicate) {
+                    Object.assign(row, {
+                        errorCode: !account ? "missing" : account.isInvalid ? "invalid" : "duplicate",
+                        state: "skipped",
+                    });
+                    continue;
+                }
+                Object.assign(row, { stage: "generating", state: "running" });
+                tests.push(row.index);
+                await new Promise(resolve => setTimeout(resolve, credentialDelay));
+                account.isDisabled = false;
+                account.isExpired = false;
+                Object.assign(row, {
+                    durationMs: credentialDelay,
+                    enabled: true,
+                    modelVerified: true,
+                    responseText: "<b>OK</b>",
+                    state: "success",
+                });
+            }
+            run.status = run.stopRequested ? "stopped" : "completed";
+        })();
+    });
+    app.post("/api/account-credential-tests/runs/:runId/stop", (req, res) => {
+        credentialRun.stopRequested = true;
+        res.json({ runId: credentialRun.runId });
+    });
     let delay = 0;
+    let mutationGate = null;
     let mode = "success";
     let deleteCalls = 0;
     let failStatus = false;
@@ -218,6 +290,7 @@ async function browserTests() {
     app.put("/api/accounts/:index/enabled", async (req, res) => {
         const index = Number(req.params.index);
         changes.push(index);
+        if (mutationGate) await mutationGate;
         if (delay) await new Promise(resolve => setTimeout(resolve, delay));
         if (mode === "network") {
             req.socket.destroy();
@@ -310,6 +383,9 @@ async function browserTests() {
             return route.request().url().startsWith(origin) ? route.continue() : route.abort();
         });
         await context.addInitScript(() => {
+            // HTTP consoles do not expose randomUUID; exercise both test buttons
+            // and submission recovery with only getRandomValues available.
+            Object.defineProperty(window.crypto, "randomUUID", { value: undefined });
             localStorage.setItem("lang", "zh");
             localStorage.setItem("theme", "light");
         });
@@ -344,6 +420,15 @@ async function browserTests() {
         assert.equal(await page.getByRole("checkbox", { exact: true, name: "选择账号 #0" }).isChecked(), true);
         await button("刷新").click();
         assert.equal(await page.getByRole("checkbox", { exact: true, name: "选择账号 #0" }).isChecked(), true);
+        await button("批量凭证测试").click();
+        await check(
+            async () => (await page.locator(".ct-result .el-tag").allTextContents()).join() === "成功,成功",
+            "cross-page credential selection"
+        );
+        assert.deepEqual(tests, [0, 20]);
+        assert.equal(await page.locator(".ct-result pre b").count(), 0, "model output must be rendered as text");
+        assert.equal(await page.locator(".ct-result pre").first().innerText(), "<b>OK</b>");
+        tests.length = 0;
         await search.fill("account0");
         await check(async () => (await page.locator("tbody tr").count()) === 10, "search should filter and reset page");
         assert.match(await page.locator(".selection-toolbar").innerText(), /0/);
@@ -361,12 +446,18 @@ async function browserTests() {
             "refresh account states"
         );
         for (const index of [0, 1, 2, 3, 4]) await select(index);
-        await button("批量检测").click();
+        await button("批量凭证测试").click();
         await check(
-            async () => (await resultStates()).filter(value => value === "已跳过").length === 4,
-            "disabled/expired/invalid/duplicate must be skipped"
+            async () =>
+                (await page.locator(".ct-result .el-tag").allTextContents()).filter(value => value === "已跳过")
+                    .length === 2,
+            "invalid/duplicate skipped; disabled/expired tested"
         );
-        assert.deepEqual(tests, [0]);
+        assert.deepEqual(tests, [0, 1, 2]);
+        assert.equal(accounts[1].isDisabled, false);
+        assert.equal(accounts[2].isExpired, false);
+        accounts[1].isDisabled = true;
+        await button("刷新").click();
         await button("清空选择").click();
         await page.locator(".filters .el-select").click();
         await page.getByRole("option", { exact: true, name: "已禁用" }).click();
@@ -392,12 +483,17 @@ async function browserTests() {
         await confirm();
         await check(async () => (await resultStates()).join() === "成功", "failed retry must finish");
         assert.deepEqual(changes, [1]);
-        delay = 700;
+        let finishMutation;
+        mutationGate = new Promise(resolve => {
+            finishMutation = resolve;
+        });
         changes = [];
         await button("批量启用").click();
         await confirm();
         await check(() => changes.length === 1, "first serial mutation starts");
         await button("停止后续执行").click();
+        mutationGate = null;
+        finishMutation();
         await check(
             async () => (await resultStates()).join() === "成功,未执行,未执行",
             "stop waits for current request"
@@ -485,6 +581,68 @@ async function browserTests() {
         assert.equal(singleDownload.suggestedFilename(), "auth-7.json");
         await row.getByRole("button", { exact: true, name: "切换账号" }).click();
         await confirm();
+        tests.length = 0;
+        credentialDelay = 1800;
+        await row.getByRole("button", { exact: true, name: "凭证测试" }).click();
+        await check(() => tests.length === 1, "single credential test starts");
+        await page.reload();
+        await check(
+            async () => (await page.locator(".credential-tests").innerText()).includes("gemini-3.8-flash"),
+            "running credential test restores after reload"
+        );
+        await check(
+            async () => (await page.locator(".ct-result .el-tag").allTextContents()).join() === "成功",
+            "single test finishes after reload"
+        );
+        assert.deepEqual(tests, [7]);
+        await select(7);
+        await select(8);
+        tests.length = 0;
+        await button("批量凭证测试").click();
+        await check(() => tests.length === 1, "batch begins before stop");
+        await button("停止后续测试").click();
+        await check(
+            async () => (await page.locator(".ct-result .el-tag").allTextContents()).join() === "成功,未执行",
+            "stop completes active test only"
+        );
+        assert.deepEqual(tests, [7]);
+        credentialDelay = 30;
+        tests.length = 0;
+        loseCredentialResponse = true;
+        failCredentialReads = true;
+        await row.getByRole("button", { exact: true, name: "凭证测试" }).click();
+        await check(() => tests.length === 1, "lost response still admitted exactly once");
+        await check(
+            async () =>
+                !!(await page.evaluate(() => window.sessionStorage.getItem("aitoapi-credential-test-submission"))),
+            "unconfirmed submission persisted"
+        );
+        loseCredentialResponse = false;
+        failCredentialReads = false;
+        await page.reload();
+        await check(
+            async () => (await page.locator(".ct-result .el-tag").allTextContents()).join() === "成功",
+            "lost submission recovered after reload"
+        );
+        await check(
+            async () =>
+                !(await page.evaluate(() => window.sessionStorage.getItem("aitoapi-credential-test-submission"))),
+            "GET retires admitted submission identifier"
+        );
+        await row.getByRole("button", { exact: true, name: "凭证测试" }).click();
+        await check(() => tests.length === 2, "deliberate retest creates a new model call after recovery");
+        await check(
+            async () => (await page.locator(".ct-result .el-tag").allTextContents()).join() === "成功",
+            "retest finishes"
+        );
+        replyCredentialReused = true;
+        await row.getByRole("button", { exact: true, name: "凭证测试" }).click();
+        await check(
+            async () => (await page.locator(".credential-tests").innerText()).includes("本次未重复调用模型"),
+            "reused submission is visible to user"
+        );
+        assert.equal(tests.length, 2);
+        replyCredentialReused = false;
         await button("去重清理").click();
         await confirm();
         await page.locator(".sidebar-menu button").first().click();
@@ -549,6 +707,10 @@ async function browserTests() {
         await check(async () => (await page.locator("tbody tr").count()) === 20, "loaded before screenshot");
         const output = path.join(root, "tmp/account-management");
         fs.mkdirSync(output, { recursive: true });
+        await page
+            .locator(".credential-tests")
+            .screenshot({ animations: "disabled", path: path.join(output, "credential-results-zh.png") });
+        await page.evaluate(() => window.scrollTo(0, 0));
         await page.screenshot({
             animations: "disabled",
             fullPage: false,
@@ -567,6 +729,10 @@ async function browserTests() {
         await page.reload();
         await check(async () => (await page.locator("h1").innerText()) === "Account Management", "English locale");
         assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
+        await page
+            .locator(".credential-tests")
+            .screenshot({ animations: "disabled", path: path.join(output, "credential-results-mobile-en.png") });
+        await page.evaluate(() => window.scrollTo(0, 0));
         assert.equal(
             await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
             true,

@@ -3,6 +3,7 @@ const path = require("node:path");
 
 const tests = [
     "credentialStore",
+    "credentialTests",
     "runtimeSettingsStore",
     "runtimeSettingsSave",
     "managementStorageIntegration",

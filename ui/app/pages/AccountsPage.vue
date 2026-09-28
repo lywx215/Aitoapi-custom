@@ -14,6 +14,8 @@
             </div>
         </header>
 
+        <p class="credential-test-hint">{{ t("ctHint") }}</p>
+
         <div class="accounts-panel">
             <div class="toolbar filters">
                 <el-input
@@ -160,7 +162,7 @@
                                         size="small"
                                         :disabled="locked"
                                         @click="start('test', [account.index])"
-                                        >{{ t("testAccount") }}</el-button
+                                        >{{ t("ctTestAccount") }}</el-button
                                     >
                                     <el-button
                                         size="small"
@@ -200,6 +202,13 @@
             </div>
         </div>
 
+        <CredentialTestPanel
+            ref="credentialTests"
+            :accounts="accounts"
+            :disabled="working || systemBusy || loadError || loading"
+            @busy="credentialBusy = $event"
+            @completed="refresh"
+        />
         <section v-if="results.length" class="accounts-panel results-panel" :aria-label="t('amResults')">
             <div class="toolbar">
                 <h2>{{ t("amResults") }}</h2>
@@ -231,6 +240,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import JSZip from "jszip";
 import I18n from "../utils/i18n";
+import CredentialTestPanel from "../components/CredentialTestPanel.vue";
 import {
     classifyAccountResult,
     classifyDeletedAccount,
@@ -272,7 +282,11 @@ const pageRows = computed(() => filtered.value.slice((page.value - 1) * pageSize
 const pageSelected = computed(() => pageRows.value.length > 0 && pageRows.value.every(row => selected.has(row.index)));
 const pageSomeSelected = computed(() => pageRows.value.some(row => selected.has(row.index)));
 const working = ref(false);
-const locked = computed(() => working.value || props.systemBusy || props.loadError || props.loading);
+const credentialTests = ref(null);
+const credentialBusy = ref(true);
+const locked = computed(
+    () => working.value || credentialBusy.value || props.systemBusy || props.loadError || props.loading
+);
 const queueRunning = ref(false);
 const stopRequested = ref(false);
 const results = ref([]);
@@ -364,6 +378,10 @@ const markError = (rows, error) =>
 
 const start = async (action, indices = [...selected]) => {
     if (locked.value || !indices.length) return;
+    if (action === "test") {
+        await credentialTests.value.start(indices);
+        return;
+    }
     working.value = true; // Lock before confirmation, including double clicks.
     try {
         if (["enable", "disable", "delete"].includes(action)) {

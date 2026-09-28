@@ -26,7 +26,15 @@ class ManagementVerifier {
         this.closed = false;
     }
 
-    async verify({ index, credentials, mode = "model", model = "gemini-3.8-flash", signal, onProgress } = {}) {
+    async verify({
+        index,
+        credentials,
+        mode = "model",
+        model = "gemini-3.8-flash",
+        signal,
+        onProgress,
+        includeResponseText = false,
+    } = {}) {
         const requestId = `verify_${crypto.randomUUID()}`;
         const attribution = { authIndex: index, model, requestId };
         const started = LoggingService.isDebugEnabled() ? Date.now() : null;
@@ -88,6 +96,7 @@ class ManagementVerifier {
             return this.execute({
                 credentials: candidate,
                 diagnostic,
+                includeResponseText,
                 index,
                 mode,
                 model,
@@ -116,7 +125,17 @@ class ManagementVerifier {
         }
     }
 
-    async execute({ index, credentials, mode, model, requestId, signal, onProgress, diagnostic = () => {} }) {
+    async execute({
+        index,
+        credentials,
+        mode,
+        model,
+        requestId,
+        signal,
+        onProgress,
+        includeResponseText,
+        diagnostic = () => {},
+    }) {
         let adapter;
         const transport = new VerifierTransport({ index, model, requestId });
         const progress = async (stage, value) => {
@@ -216,6 +235,7 @@ class ManagementVerifier {
                 stage: mode === "model" ? "model_verified" : "connection_ready",
                 success: true,
                 upstreamStatus,
+                ...(includeResponseText && mode === "model" ? { responseText: transport.responseText } : {}),
             };
         } catch (error) {
             primaryError = error;

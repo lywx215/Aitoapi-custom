@@ -243,6 +243,30 @@ class StatusRoutes {
             }
         });
 
+        const credentialTestRoute = (method, route, operation, status = 200) => {
+            app[method](route, isAuthenticated, (req, res) => {
+                res.setHeader("Cache-Control", "no-store");
+                try {
+                    res.status(status).json(operation(this.serverSystem.credentialTestService, req));
+                } catch (error) {
+                    const { safeError } = require("../management/ManagementSupport");
+                    res.status(error.status || 500).json({ ...safeError(error), success: false });
+                }
+            });
+        };
+        credentialTestRoute("get", "/api/account-credential-tests", (service, req) =>
+            service.snapshot(req.query.clientRequestId)
+        );
+        credentialTestRoute(
+            "post",
+            "/api/account-credential-tests/runs",
+            (service, req) => service.start(req.body),
+            202
+        );
+        credentialTestRoute("post", "/api/account-credential-tests/runs/:runId/stop", (service, req) =>
+            service.stop(req.params.runId)
+        );
+
         app.post("/api/model-probes/runs", isAuthenticated, (req, res) => {
             try {
                 const run = this.serverSystem.modelProbeService.start();

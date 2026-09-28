@@ -66,7 +66,10 @@ const LoggingService = require("../../src/utils/LoggingService");
             }
         );
         await system.shutdown();
+        const credentialTestFile = path.join(rootDir, "data", "account-credential-tests.json");
+        fs.writeFileSync(credentialTestFile, "{truncated");
         system = new ProxyServerSystem();
+        assert.equal(system.credentialTestService.snapshot().persistenceError, true);
         system.config.host = "127.0.0.1";
         system.config.httpPort = 0;
         system.config.wsPort = 0;
@@ -81,6 +84,7 @@ const LoggingService = require("../../src/utils/LoggingService");
         assert.equal(system.authSource.store.getMetadata(pending.index).disabled, true);
         assert.equal((await request("/api/manage/v1/accounts", token)).body.data.total, 1);
         assert.equal(system.browserManager.browser, null);
+        assert.equal(fs.readFileSync(credentialTestFile, "utf8"), "{truncated");
         console.log("managementStartup: real empty-instance HTTP/WS startup, key separation and shutdown passed");
     } finally {
         if (system) await system.shutdown();

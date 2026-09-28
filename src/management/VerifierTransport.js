@@ -121,6 +121,12 @@ class VerifierTransport {
                                 )
                         );
                         if (!candidate) throw new VerificationError("empty_response", status);
+                        this.responseText = candidate.content.parts
+                            .filter(part => !part.thought && typeof part.text === "string")
+                            .map(part => part.text)
+                            .join("")
+                            .trim()
+                            .slice(0, 2000);
                         resolve(status);
                     } else if (packet.event_type !== "response_headers") {
                         throw new VerificationError("protocol_mismatch");

@@ -2,7 +2,7 @@
 
 > 用途：作为后续功能追加、故障修复、重构、发布和文档同步的统一参照。
 >
-> 基线版本：`1.2.6` ｜ 分支：`main` ｜ 基线提交：`d24d14e` ｜ 更新日期：`2026-09-19`
+> 基线版本：`1.2.6` ｜ 分支：`main` ｜ 基线提交：`d24d14e` ｜ 更新日期：`2026-09-28`
 
 ## 1. 文档定位与事实来源
 
@@ -274,6 +274,7 @@ API Key 支持 `x-goog-api-key`、`Authorization: Bearer`、`x-api-key` 和查�
 - 登录与 VNC：`/login`、`/logout`、`/api/vnc/*`；
 - 状态与版本：`/health`、`/api/status`、`/api/version/check`；
 - 模型探测：`GET /api/model-probes`、`POST /api/model-probes/runs`、`POST /api/model-probes/runs/:runId/cancel`；
+- 凭证测试：`GET /api/account-credential-tests`、`POST /api/account-credential-tests/runs`（`indices` 与 `clientRequestId`）、`POST /api/account-credential-tests/runs/:runId/stop`；
 - 用量统计：`/api/usage-stats*`；
 - 账号操作：切换、测试、去重、启禁用、单个/批量删除与下载；
 - 运行参数：流式模式、强制工具、日志、重试、上下文、冷却、AutoHeal；
@@ -305,6 +306,14 @@ API Key 支持 `x-goog-api-key`、`Authorization: Bearer`、`x-api-key` 和查�
 探测是控制台手动任务，并且会产生真实上游调用。它按启用账号顺序工作，每个账号只建立一个池外隔离浏览器，在其中串行测试仍未成功的模型；模型一旦成功便不再使用后续账号测试。文本响应要求有效文本，Gemini 图片响应要求 `inlineData`，Imagen 响应要求 `predictions[].bytesBase64Encoded`。图片数据只在内存中验证，不落盘。
 
 结果分为 `available`、`unavailable`、`indeterminate`、`not_tested`。只有所有已启用账号都明确返回 403/404 时才标记不可用；401、429、超时、5xx 和无效响应均属于不确定。探测不切换生产当前账号、不占生产上下文、不修改账号启用状态或普通请求统计，且 `/v1/models` 始终返回静态完整目录。
+
+### 8.2.1 账号凭证测试
+
+账号页通过 `CredentialTestService` 在后台串行测试所选账号，固定调用 `gemini-3.8-flash`。控制台使用独立 `ManagementVerifier` 实例，避免与管理 API 共享排队超时；每个账号开始后最多十分钟，批次等待不计入。必须确认预期邮箱、请求归属、模型、正常结束和非空正文，连接成功不能代替模型成功。缺少邮箱不调用模型；无效、重复、删除账号跳过。验证正文为 STOP candidate 中非思考 text 的前 2000 字符，只在控制台显式请求时返回；管理 API 验证结果保持原结构。
+
+成功后自动启用是用户主动恢复，包括 quota、crash-loop 和 401/403 自动禁用账号；保持路由冷却和历史熔断计数。需要恢复的账号使用 credential/state 双版本条件更新，与 AutoHeal 并发时后提交者报告冲突。已启用账号不写状态，仅校验 accountId 与 stateVersion；例行 Cookie 刷新不会造成假冲突，凭证变化时显示“结果对应测试时快照”。模型通过但保存启用或刷新账号池失败，会单独展示，不当作完整成功。
+
+页面每两秒查询当前任务；离开/刷新继续执行。停止仅阻止后续账号。关闭服务中止运行项并清理独立验证器；重启不重放模型请求。重试只包含验证失败及未验证的中断项，排除已验证项、版本冲突、跳过和未执行项。一次最多 1000 账号，全局最多一批；提交标识去重保存 30 天，最多 1000 条，满额拒绝新提交而不提前删除有效记录。任务写入失败后停止后续操作，需要修复存储并重启恢复。
 
 ### 8.3 后缀语法
 
@@ -354,6 +363,7 @@ Web UI 当前持久化：`maxContexts`、`maxRetries`、`retryDelay`、`autoDisa
 | `configs/runtime-settings.json` | UI 持久化参数                           | 已忽略              |
 | `data/usage-stats.jsonl`        | 请求统计                                | 已忽略；持续增长    |
 | `data/account-route-state.json` | 冷却、quota 与错误状态                  | 已忽略              |
+| `data/account-credential-tests.json` | 当前/最近完成凭证测试、回复摘要及提交去重记录 | 已忽略；不含凭证，原子写入 |
 | `data/model-probes.json`        | 最近完整模型探测结果与当前任务状态      | 已忽略；原子写入    |
 | `data/removed-auth-backup/`     | 自动移除账号备份                        | 已忽略；敏感凭证    |
 | `proxylist.txt`                 | 每账号固定代理候选                      | 已忽略；可能含密码  |
@@ -476,6 +486,8 @@ npm run test:crashloop-quarantine
 npm run test:crashloop-autoheal
 npm run test:quota
 npm run test:autoheal-probe
+node scripts/tests/credentialTests.test.js
+node scripts/tests/accountManagement.test.js --ui
 ```
 
 仓库还有两个未注册到 `package.json` 的测试：

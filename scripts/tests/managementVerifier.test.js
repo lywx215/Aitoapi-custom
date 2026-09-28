@@ -200,6 +200,25 @@ test("failed beta is never replaced by successful alpha", async () => {
     await h.verifier.close();
 });
 
+test("response excerpt is opt-in, non-thought STOP text only, capped without changing legacy results", async () => {
+    const h = harness({
+        respond(socket, request) {
+            const body = payload("gemini-3.8-flash");
+            body.candidates[0].content.parts = [
+                { text: "hidden reasoning", thought: true },
+                { text: "x".repeat(2100) },
+            ];
+            sendResponse(socket, request, { body });
+        },
+    });
+    const legacy = await h.verifier.verify({ credentials: alpha, index: 3 });
+    assert.equal(Object.hasOwn(legacy, "responseText"), false);
+    const expanded = await h.verifier.verify({ credentials: alpha, includeResponseText: true, index: 3 });
+    assert.equal(expanded.responseText, "x".repeat(2000));
+    assert.equal(expanded.upstreamStatus, 200);
+    await h.verifier.close();
+});
+
 for (const [label, packet] of Object.entries({
     attempt: { request_attempt_id: "other" },
     index: { authIndex: 9 },

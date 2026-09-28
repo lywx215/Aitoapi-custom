@@ -368,3 +368,7 @@ NO_PROXY=internal.example.com,10.0.0.0/8
 如果你觉得 Aitoapi Custom 对你有帮助，欢迎给项目点一个 ⭐️！
 
 [![Star History Chart](https://api.star-history.com/svg?repos=iBUHub/AIStudioToAPI&type=date&legend=top-left)](https://www.star-history.com/#iBUHub/AIStudioToAPI&type=date&legend=top-left)
+
+### 账号凭证测试
+
+账号管理支持单个及批量凭证测试：后台启动所选账号，实际调用 `gemini-3.8-flash` 并展示有效回复，成功后自动启用。刷新或离开页面不影响执行。详细状态、恢复及持久化说明见 [二开说明](README_CUSTOM.md#凭证测试结果与恢复)。

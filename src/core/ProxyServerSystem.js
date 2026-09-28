@@ -33,6 +33,7 @@ const ManagementRoutes = require("../routes/ManagementRoutes");
 const ManagementKeyRoutes = require("../routes/ManagementKeyRoutes");
 const ManagementRuntime = require("../management/ManagementRuntime");
 const ModelProbeService = require("../model-probe/ModelProbeService");
+const CredentialTestService = require("../management/CredentialTestService");
 
 /**
  * Proxy Server System
@@ -125,6 +126,7 @@ class ProxyServerSystem extends EventEmitter {
         this.browserManager.setSystemBusyProvider(() => this.requestHandler?.isSystemBusy === true);
 
         this.modelProbeService = new ModelProbeService(this);
+        this.credentialTestService = new CredentialTestService(this);
 
         this.httpServer = null;
         this.wsServer = null;
@@ -710,6 +712,7 @@ class ProxyServerSystem extends EventEmitter {
         this.logger.info("[System] Shutting down server system...");
         const managementCleanup = await Promise.allSettled([
             Promise.resolve().then(() => this.modelProbeService?.close()),
+            Promise.resolve().then(() => this.credentialTestService?.close()),
             Promise.resolve().then(() => this.managementTaskService?.close()),
             Promise.resolve().then(() => this.managementVerifier?.close()),
         ]);
