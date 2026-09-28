@@ -14,6 +14,7 @@ const os = require("os");
 
 const { parseProxyFromEnv } = require("../utils/ProxyUtils");
 const StickyProxyManager = require("../utils/StickyProxyManager");
+const { installManagedClient } = require("../utils/ManagedClientScript");
 const {
     AuthExpiredError,
     isAuthExpiredError,
@@ -890,6 +891,7 @@ class BrowserManager {
                 ...(proxyConfig ? { proxy: proxyConfig } : {}),
             });
             await context.addInitScript(this._getPrivacyProtectionScript(authIndex));
+            await installManagedClient(context, authIndex);
             const page = await context.newPage();
             let wsSuccess = false;
             let wsFailed = false;
@@ -2364,6 +2366,7 @@ class BrowserManager {
             // Inject Privacy Script immediately after context creation
             const privacyScript = this._getPrivacyProtectionScript(authIndex);
             await context.addInitScript(privacyScript);
+            await installManagedClient(context, authIndex);
 
             page = await context.newPage();
 

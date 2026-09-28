@@ -215,6 +215,29 @@ test("manual disable and credential replacement win the double-version CAS", asy
     }
 });
 
+test("public failed tasks retain actionable verifier stages without credential details", async t => {
+    for (const stage of ["terms_required", "initialization_failed", "empty_response", "connection_closed"]) {
+        const f = fixture(t, async input => {
+            throw Object.assign(new Error("fixture-private-detail"), {
+                authIndex: input.index,
+                code: "VERIFICATION_FAILED",
+                model: input.model,
+                requestId: "verify-stage-fixture",
+                stage,
+                upstreamStatus: stage === "empty_response" ? 200 : null,
+            });
+        });
+        const accepted = f.submit("import", { items: [{ clientRef: "alpha", credentials: credentials("alpha") }] });
+        f.tasks.start();
+        const task = await done(f.tasks, accepted.taskId);
+        assert.equal(task.items[0].stage, stage);
+        assert.equal(task.items[0].result.stage, stage);
+        assert.equal(task.items[0].upload.status, "committed");
+        assert.equal(f.accounts.list().items[0].enabled, true);
+        assert(!JSON.stringify(task).includes("fixture-private-detail"));
+    }
+});
+
 test("candidate replacement failure preserves original enabled credentials; success has CAS and drain", async t => {
     let fail = true;
     const f = fixture(t, async input => {

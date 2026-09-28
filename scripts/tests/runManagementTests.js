@@ -13,6 +13,7 @@ const tests = [
     "managementUploadReceipts",
     "managementRoutes",
     "managementVerifier",
+    "managedClientScript",
     "managementLiveHarness",
     "managementAcceptance",
     "requestRouting",

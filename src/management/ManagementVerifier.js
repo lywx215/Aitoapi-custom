@@ -170,9 +170,10 @@ class ManagementVerifier {
                     lastReadiness = readiness;
                 }
                 if (connected) {
-                    if (!identity) throw new VerificationError("identity_unconfirmed");
                     if (transport.socket?.readyState !== 1) throw new VerificationError("connection_closed");
-                    break;
+                    // The first-party account switcher renders asynchronously.
+                    // A ready app socket alone is not an identity failure or success.
+                    if (identity) break;
                 }
                 if (adapter.wake) await abortable(adapter.wake(), signal);
                 await delay(this.pollMs, signal);
@@ -197,6 +198,8 @@ class ManagementVerifier {
                     const current = checkIdentity(await abortable(adapter.inspect(), signal));
                     if (!current) throw new VerificationError("identity_unconfirmed");
                     if (current !== identity) throw new VerificationError("identity_mismatch");
+                    // AI Studio may show Launch only after the first model request.
+                    if (adapter.wake) await abortable(adapter.wake(), signal);
                     await delay(this.pollMs, signal);
                 }
                 await result;

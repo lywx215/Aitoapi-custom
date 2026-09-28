@@ -68,6 +68,7 @@ async function fullMount() {
                 close,
                 evaluate: async fn => vm.runInNewContext(`(${fn.toString()})()`, record.sandbox),
                 getByRole: () => ({ first: () => ({ isVisible: async () => false }) }),
+                getByText: () => ({ first: () => ({ isVisible: async () => false }) }),
                 goto: async url => {
                     record.entryUrl = url;
                     assert.equal(url, system.config.aiStudioAppUrl);
@@ -76,6 +77,7 @@ async function fullMount() {
                     await once(record.socket, "open");
                 },
                 isClosed: () => record.closed,
+                on() {},
             };
             return {
                 close,
@@ -143,7 +145,7 @@ async function fullMount() {
                         URLSearchParams,
                         window,
                     };
-                    return { close, newPage: async () => page, on() {} };
+                    return { close, newPage: async () => page, on() {}, async route() {} };
                 },
             };
         };

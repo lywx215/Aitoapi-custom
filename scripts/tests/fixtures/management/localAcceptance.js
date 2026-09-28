@@ -243,7 +243,7 @@ function registerLocalAcceptance(test) {
                     assert.equal(h.system.browserManager.contexts.size, 0);
                     assert.equal(h.system.connectionRegistry.getAllConnections().size, 0);
                     for (const entry of h.fetches)
-                        assert.equal(JSON.parse(entry.config.body).generationConfig.maxOutputTokens, 64);
+                        assert.equal(JSON.parse(entry.config.body).generationConfig.maxOutputTokens, 1024);
                     // Readiness needs an actual ready production connection, not just verified credentials.
                     h.system.browserManager.browser = { isConnected: () => true };
                     assert.equal((await call("GET", "/system/readiness")).body.data.ready, false);

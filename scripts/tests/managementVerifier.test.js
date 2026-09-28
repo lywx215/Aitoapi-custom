@@ -268,8 +268,10 @@ for (const [stage, state] of Object.entries({
     terms_required: { stage: "terms_required" },
 })) {
     test(`session gate: ${stage}`, async () => {
-        const h = harness({ inspect: () => state });
-        await assert.rejects(h.verifier.verify({ credentials: alpha, index: 3 }), { stage });
+        const h = harness({ inspect: () => state, timeoutMs: 100 });
+        await assert.rejects(h.verifier.verify({ credentials: alpha, index: 3 }), {
+            stage: stage === "identity_unconfirmed" ? "timeout" : stage,
+        });
         assert.equal(h.records[0].request, undefined);
         await h.verifier.close();
     });
@@ -428,7 +430,10 @@ test("current-session metadata reader ignores arbitrary page emails and untruste
     const inspect = BrowserAdapter.inspectSessionPage.toString();
     const read = (url, email, text = "") =>
         vm.runInNewContext(`(${inspect})()`, {
-            document: { querySelectorAll: () => [{ getClientRects: () => [1], innerText: text }] },
+            document: {
+                querySelectorAll: selector =>
+                    selector.startsWith("ms-account-switcher") ? [] : [{ getClientRects: () => [1], innerText: text }],
+            },
             location: { href: url },
             URL,
             window: { WIZ_global_data: { oPEP7c: email } },
@@ -474,6 +479,8 @@ test("init script redirects only its own context's production endpoint and rejec
     );
     new isolated.WebSocket("ws://127.0.0.1:9998?authIndex=3");
     assert.equal(urls[0], "ws://127.0.0.1:45678/nonce");
+    new isolated.WebSocket("ws://127.0.0.1:45678/nonce");
+    assert.equal(urls[1], "ws://127.0.0.1:45678/nonce");
     assert.throws(() => new isolated.WebSocket("ws://127.0.0.1:9998?authIndex=4"));
     assert.throws(() => new isolated.WebSocket("ws://localhost:9998"));
     assert.equal(isolated.chrome._contextId, 3);
@@ -534,6 +541,7 @@ test("real adapter accepts ConfigLoader default ai.studio entry and follows the 
             calls.finalUrl = "https://aistudio.google.com/apps/test";
         },
         isClosed: () => false,
+        on() {},
     };
     const context = {
         async close() {
@@ -543,11 +551,13 @@ test("real adapter accepts ConfigLoader default ai.studio entry and follows the 
             return page;
         },
         on() {},
+        async route() {},
     };
     firefox.launch = async options => {
         calls.launch = options;
         return {
             async close() {
+                calls.contextClosed = true;
                 calls.browserClosed = true;
             },
             async newContext(options) {
@@ -559,7 +569,7 @@ test("real adapter accepts ConfigLoader default ai.studio entry and follows the 
     try {
         await adapter.start({
             credentials: { ...beta, disabled: true },
-            endpoint: "ws://127.0.0.1:12345/fixture",
+            endpoint: `ws://127.0.0.1:12345/verify/${"a".repeat(64)}?authIndex=8`,
             index: 8,
             signal: new AbortController().signal,
         });
@@ -624,10 +634,51 @@ test("app entry controls use exact names; no generic Continue/consent click", as
                     }),
                 };
             },
+            getByText: () => ({ first: () => ({ isVisible: async () => false }) }),
         };
         await adapter.wake();
         assert.deepEqual(clicked, ["Continue", "Accept terms"].includes(target) ? [] : [target]);
     }
+});
+
+test("late icon-only Launch is handled while the model request is pending", async () => {
+    let request;
+    let clicks = 0;
+    const h = harness({
+        respond: (socket, packet) => {
+            request = { packet, socket };
+        },
+    });
+    const factory = h.verifier.adapterFactory;
+    h.verifier.adapterFactory = () => ({
+        ...factory(),
+        wake: async () => {
+            if (!request) return;
+            const adapter = new BrowserAdapter();
+            adapter.page = {
+                getByRole: () => ({ first: () => ({ isVisible: async () => false }) }),
+                getByText: (text, options) => {
+                    assert.equal(text, "rocket_launch");
+                    assert.equal(options.exact, true);
+                    return {
+                        first: () => ({
+                            click: async () => {
+                                clicks++;
+                                sendResponse(request.socket, request.packet);
+                                request = null;
+                            },
+                            isVisible: async () => true,
+                        }),
+                    };
+                },
+            };
+            await adapter.wake();
+        },
+    });
+    const result = await h.verifier.verify({ credentials: alpha, index: 3 });
+    assert.equal(result.success, true);
+    assert.equal(clicks, 1);
+    await h.verifier.close();
 });
 
 test("deadline includes queue wait and queued timeout never creates a context", async () => {
@@ -718,6 +769,6 @@ test("existing real client script speaks the verifier protocol with a mocked ups
         requests[0].url,
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
     );
-    assert.equal(JSON.parse(requests[0].config.body).generationConfig.maxOutputTokens, 64);
+    assert.equal(JSON.parse(requests[0].config.body).generationConfig.maxOutputTokens, 1024);
     await verifier.close();
 });

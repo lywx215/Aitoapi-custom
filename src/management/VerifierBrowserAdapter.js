@@ -2,6 +2,7 @@
 const path = require("path");
 const { VerificationError, abortable } = require("./VerifierSupport");
 const { parseProxyFromEnv } = require("../utils/ProxyUtils");
+const { installManagedClient } = require("../utils/ManagedClientScript");
 
 // Executed before scripts in every frame of this owned verification page only.
 function installIsolation({ index, endpoint }) {
@@ -12,7 +13,7 @@ function installIsolation({ index, endpoint }) {
             if (parsed.protocol === "ws:" && parsed.hostname === "127.0.0.1" && parsed.port === "9998") {
                 if (parsed.searchParams.get("authIndex") !== String(index)) throw new Error("Wrong verification index");
                 url = endpoint;
-            } else if (["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)) {
+            } else if (parsed.href !== endpoint && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)) {
                 throw new Error("Unexpected local WebSocket");
             }
             super(url, protocols);
@@ -29,10 +30,10 @@ function installIsolation({ index, endpoint }) {
     }
 }
 
-// Do not search body text, aria labels, arbitrary email strings or cookies for identity.
-// Adapter assumption: WIZ_global_data.oPEP7c is the first-party bootstrap session email.
-// This mapping has NOT been live-validated by the offline test suite. Missing/changed
-// metadata is intentionally a closed gate requiring adapter maintenance/live evidence.
+// Do not search application content, arbitrary email strings or cookies for identity.
+// Current AI Studio /apps exposes the signed-in account in its own account switcher.
+// The app viewer may omit that control; inspect() opens the first-party /apps page
+// in the same isolated context rather than accepting an email from application content.
 function inspectSessionPage() {
     const url = new URL(location.href);
     if (url.hostname === "accounts.google.com") return { stage: "login_required" };
@@ -49,7 +50,19 @@ function inspectSessionPage() {
     if (/not available in your (?:country|region)|unsupported (?:country|region)|所在地区/i.test(labels))
         return { stage: "region_restricted" };
     if (/permission denied|access denied|forbidden|无权访问/i.test(labels)) return { stage: "permission_denied" };
-    const email = window.WIZ_global_data?.oPEP7c;
+    let email = window.WIZ_global_data?.oPEP7c;
+    if (typeof email !== "string") {
+        const identities = Array.from(document.querySelectorAll("ms-account-switcher button[aria-label]"))
+            .filter(visible)
+            .map(
+                node =>
+                    (node.getAttribute("aria-label") || "").match(
+                        /^Google Account:.*\(([^\s()@]+@[^\s()@]+\.[^\s()@]+)\)$/
+                    )?.[1]
+            )
+            .filter(Boolean);
+        if (new Set(identities).size === 1) email = identities[0];
+    }
     if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
         return { stage: "identity_unconfirmed" };
     return { identity: { email, origin: url.origin, source: "aistudio_session" } };
@@ -133,41 +146,73 @@ class VerifierBrowserAdapter {
             signal
         );
         const page = await this.acquire(context.newPage(), "page", signal);
+        await installManagedClient(context, index, {
+            endpoint,
+            onUnsupported: () => {
+                this.clientUnsupported = true;
+            },
+        });
         await abortable(page.addInitScript(installIsolation, { endpoint, index }), signal);
         // Extra windows are not part of verification. They cannot supply its result.
-        context.on("page", other => {
-            if (other !== page) other.close().catch(() => {});
-        });
+        page.on("popup", other => other.close().catch(() => {}));
+        this.signal = signal;
         await abortable(page.goto(target.href, { timeout: 60000, waitUntil: "domcontentloaded" }), signal);
     }
 
     async inspect() {
+        if (this.clientUnsupported) throw new VerificationError("initialization_failed");
         if (!this.page || this.page.isClosed()) throw new VerificationError("connection_closed");
-        return this.page.evaluate(inspectSessionPage);
+        const state = await this.page.evaluate(inspectSessionPage);
+        if (state.stage !== "identity_unconfirmed") return state;
+        if (new URL(this.page.url()).origin !== "https://aistudio.google.com") return state;
+        if (!this.identityPage) {
+            const identityPage = await this.acquire(this.context.newPage(), "identityPage", this.signal);
+            identityPage.on("popup", other => other.close().catch(() => {}));
+            await identityPage.goto("https://aistudio.google.com/apps", {
+                timeout: 30000,
+                waitUntil: "domcontentloaded",
+            });
+        }
+        return this.identityPage.evaluate(inspectSessionPage);
     }
 
     async wake() {
         // inspectSessionPage gates legal consent and login challenges before this runs.
         // These exact controls only open/run the already-authorized AI Studio app.
+        const click = async control => {
+            try {
+                if (!(await control.isVisible())) return false;
+                await control.click({ timeout: 1000 });
+                return true;
+            } catch (error) {
+                // The launch overlay can animate/disappear between polling and clicking.
+                // Retry it under the verification deadline, without resetting that deadline.
+                if (error.name === "TimeoutError") return false;
+                throw error;
+            }
+        };
         for (const name of ["Continue to the app", "Skip", "Launch", "rocket_launch"]) {
             const button = this.page.getByRole("button", { exact: true, name }).first();
-            if (await button.isVisible()) {
-                await button.click({ timeout: 1000 });
-                return;
-            }
+            if (await click(button)) return;
         }
+        // The live app's launch prompt is an icon span, not an accessible button.
+        const rocket = this.page.getByText("rocket_launch", { exact: true }).first();
+        await click(rocket);
     }
 
     close() {
         if (this.closePromise) return this.closePromise;
         this.closed = true;
         this.closePromise = (async () => {
-            // Start independent closes together so a stuck page close cannot prevent browser shutdown.
-            const results = await Promise.allSettled([
-                ...this.pending,
-                Promise.resolve().then(() => this.context?.close()),
-                Promise.resolve().then(() => this.browser?.close()),
-            ]);
+            // Let acquisitions settle before closing the single owning browser.
+            const results = await Promise.allSettled([...this.pending]);
+            // Closing the browser owns context/page cleanup. Racing context.close()
+            // against browser.close() produced spurious cleanup_failed results.
+            results.push(
+                ...(await Promise.allSettled([
+                    Promise.resolve().then(() => (this.browser ? this.browser.close() : this.context?.close())),
+                ]))
+            );
             if (results.some(result => result.status === "rejected" && !(result.reason instanceof VerificationError))) {
                 throw new VerificationError("cleanup_failed");
             }

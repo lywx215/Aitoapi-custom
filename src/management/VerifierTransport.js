@@ -134,7 +134,13 @@ class VerifierTransport {
             JSON.stringify({
                 body: JSON.stringify({
                     contents: [{ parts: [{ text: "Reply with exactly OK." }], role: "user" }],
-                    generationConfig: { maxOutputTokens: 64, temperature: 0 },
+                    generationConfig: {
+                        // Thinking tokens share the output budget. The former 64-token
+                        // probe truncated a live Pro response even for "OK".
+                        maxOutputTokens: 1024,
+                        temperature: 0,
+                        ...(/^gemini-3(?:[.-]|$)/.test(this.model) ? { thinkingConfig: { thinkingLevel: "LOW" } } : {}),
+                    },
                 }),
                 event_type: "proxy_request",
                 headers: { "Content-Type": "application/json" },

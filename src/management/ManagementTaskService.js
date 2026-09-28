@@ -470,6 +470,14 @@ class ManagementTaskService {
                 "quota_exceeded",
                 "timeout",
                 "cancelled",
+                "terms_required",
+                "region_restricted",
+                "initialization_failed",
+                "connection_closed",
+                "protocol_mismatch",
+                "empty_response",
+                "cleanup_failed",
+                "upstream_error",
             ].includes(value.stage)
                 ? value.stage
                 : "failed",
