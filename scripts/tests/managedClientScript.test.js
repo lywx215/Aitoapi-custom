@@ -158,6 +158,24 @@ test("adapter closes its browser once without racing a second context close", as
     assert.equal(closed, 1);
 });
 
+test("Google's generic Continue button is a terms gate when its accessible label says so", () => {
+    const result = vm.runInNewContext(`(${Adapter.inspectSessionPage.toString()})()`, {
+        document: {
+            querySelectorAll: () => [
+                {
+                    getAttribute: name => (name === "aria-label" ? "Accept terms of service" : null),
+                    getClientRects: () => [1],
+                    innerText: "Continue",
+                },
+            ],
+        },
+        location: { href: "https://aistudio.google.com/apps/fixture" },
+        URL,
+        window: { WIZ_global_data: { oPEP7c: "fixture@example.invalid" } },
+    });
+    assert.equal(result.stage, "terms_required");
+});
+
 test("page-world bundled client connects to its isolated endpoint without an init-script WebSocket override", async () => {
     let handler, script;
     const endpoint = `ws://127.0.0.1:45678/verify/${"a".repeat(64)}?authIndex=18`;

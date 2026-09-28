@@ -41,7 +41,7 @@ function inspectSessionPage() {
     const visible = node => Boolean(node.getClientRects().length);
     const labels = Array.from(document.querySelectorAll('button, [role="button"], h1, h2, [role="dialog"]'))
         .filter(visible)
-        .map(node => (node.innerText || "").trim())
+        .map(node => `${node.innerText || ""}\n${node.getAttribute?.("aria-label") || ""}`.trim())
         .join("\n")
         .slice(0, 16000);
     if (/sign in|verify (?:it.s you|your identity)|登录|验证您的身份/i.test(labels)) return { stage: "login_required" };

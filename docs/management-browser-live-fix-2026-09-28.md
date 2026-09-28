@@ -25,6 +25,12 @@
 
 本地管理回归覆盖真实服务装配、取消/清理、请求归属、上传与验证分离；新增真实浏览器现象对应的客户端加载、图标晚出现、具体失败阶段回传测试。模拟用例不替代线上验收。
 
-正式发布后需复测两个已上传账号的 management test，以及普通 `/v1/chat/completions`；比较账号启停、版本和上传回执。共享 MySQL 并发/回滚与完整代理矩阵不由本次验证代替。未运行本地 Docker、GitHub Actions 或 Claude 审核。
+正式部署 `d3e8849` 于 2026-09-28 04:10:29 UTC 完成，随后得到以下结果：
+
+- 普通 `/v1/chat/completions`：HTTP 200，回复 `OK`，`finish_reason=stop`，约 3.98 秒。原 `browser_upgrade_required` 已消除。
+- 账号 18：正式 management test `task_da346103-f3b9-4291-b462-142ed3c2c604` 于 04:16:30 UTC 成功；目标 `gemini-3.1-pro-preview`，`model_verified`，上游 HTTP 200，`changed=false`。
+- 账号 17：Google AI Studio 显示条款确认页，尚未进入模型请求。其按钮正文仅为 `Continue`，实际 `aria-label` 为 `Accept terms of service`。补充读取可见控件的 accessible label 后，隔离连接诊断准确返回 `terms_required`。未代用户接受条款；已取消本次等待中的测试。
+
+上传成功、账号启用、模型验证分别记录。账号 17 需要用户确认 Google 条款后再验证，不能把这一阻塞归类为上传失败，也不能据此声称两个账号均可用。共享 MySQL 仅做只读核实，本次不覆盖并发/回滚与完整代理矩阵。未运行本地 Docker、GitHub Actions 或 Claude 审核。
 
 参考：[Camoufox 作用域说明](https://camoufox.com/python/main-world-eval/)、[Google 思考与输出预算说明](https://ai.google.dev/gemini-api/docs/generate-content/thinking)。
