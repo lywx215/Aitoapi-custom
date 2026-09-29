@@ -168,13 +168,14 @@ class UsageStatsService {
             lastAttempt.errorMessage = result.errorMessage || null;
         }
         const lastParsed = lastAttempt?.accountKey ? this._parseAccountKey(lastAttempt.accountKey) : {};
-        const finalAuthIndex =
-            this._normalizeAuthIndex(result.finalAuthIndex) ?? lastParsed.authIndex ?? tracker.initialAuthIndex ?? null;
-        const finalAccountName =
-            this._normalizeAccountName(result.finalAccountName) ??
-            lastParsed.accountName ??
-            tracker.initialAccountName ??
-            null;
+        // A routing rejection has no upstream account, even if an initial
+        // assignment existed. Keep that assignment only in the initial fields.
+        const finalAuthIndex = lastAttempt
+            ? (this._normalizeAuthIndex(result.finalAuthIndex) ?? lastParsed.authIndex ?? null)
+            : null;
+        const finalAccountName = lastAttempt
+            ? (this._normalizeAccountName(result.finalAccountName) ?? lastParsed.accountName ?? null)
+            : null;
         const outcome = finalOutcome;
         const statusCode = Number.isFinite(result.statusCode) ? Number(result.statusCode) : null;
         const durationMs = Math.max(0, finishedAtMs - tracker.startedAtMs);

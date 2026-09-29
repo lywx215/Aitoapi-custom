@@ -7,8 +7,7 @@
 const assert = require("assert");
 const UsageStatsService = require("../../src/core/UsageStatsService");
 
-const upTo = n =>
-    Array.from({ length: n }, (_, i) => ({ sequence: i + 1, requestId: `req_${i}` }));
+const upTo = n => Array.from({ length: n }, (_, i) => ({ requestId: `req_${i}`, sequence: i + 1 }));
 
 const cases = [];
 const check = (name, fn) => {
@@ -65,6 +64,25 @@ check("invalid/absent limit falls back to 500", () => {
 
 check("null snapshot is tolerated", () => {
     assert.strictEqual(UsageStatsService.applyRecordsLimit(null, 500), null);
+});
+
+check("routing rejection has no final account; attempted requests keep the actual account", () => {
+    const stats = new UsageStatsService(null, null, null, false);
+    stats.enabled = true;
+    stats._appendRecord = () => {};
+    stats.startRequest("rejected", { initialAccountName: "initial", initialAuthIndex: 2, model: "gemini-test" });
+    const rejected = stats.finishRequest("rejected", { outcome: "error", statusCode: 429 });
+    assert.strictEqual(rejected.attemptCount, 0);
+    assert.strictEqual(rejected.initialAuthIndex, 2);
+    assert.strictEqual(rejected.finalAuthIndex, null);
+    assert.strictEqual(rejected.finalAccountName, null);
+    stats.startRequest("retried", { initialAccountName: "initial", initialAuthIndex: 2 });
+    stats.recordAttempt("retried", 2, "initial");
+    stats.recordAttempt("retried", 3, "replacement");
+    const retried = stats.finishRequest("retried", { outcome: "success", statusCode: 200 });
+    assert.strictEqual(retried.attemptCount, 2);
+    assert.strictEqual(retried.finalAuthIndex, 3);
+    assert.strictEqual(retried.finalAccountName, "replacement");
 });
 
 console.log(cases.join("\n"));

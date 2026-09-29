@@ -68,6 +68,7 @@ async function request({
     connectionState = 1,
     clientAbortMs = null,
     acceptReadError = false,
+    configureHandler = null,
 }) {
     let currentQueue;
     let attemptNo = 0;
@@ -142,6 +143,7 @@ async function request({
         formatConverter: new FormatConverter(logger, { config: { safetySettingsThreshold: "OFF" } }),
         logger,
     };
+    configureHandler?.(handler);
     const server = http.createServer(async (req, res) => {
         const proxy = {
             body: JSON.stringify({ tools }),

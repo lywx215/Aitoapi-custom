@@ -440,11 +440,19 @@ async function run(handler, proxyRequest, initialQueue, req, res, options) {
                     const details = { message: "Upstream HTTP error", modelName: model, status: error.status };
                     handler._autoDisableAccountForStatus(authIndex, details);
                     if (error.status === 429) handler._markAccount429ForModel(authIndex, model, details);
-                    if (eligible && handler._shouldSwitchImmediatelyForStatus(error.status)) {
+                    // A 429 has already quarantined this credential for the
+                    // model. Retrying it is unsafe even if immediate switching
+                    // was disabled in configuration.
+                    if (eligible && (error.status === 429 || handler._shouldSwitchImmediatelyForStatus(error.status))) {
                         eligible = await abortable(
-                            handler._prepareImmediateStatusRetry(details, requestId, tracker, authIndex),
+                            handler._prepareImmediateStatusRetry(details, requestId, tracker, authIndex, {
+                                deadline,
+                                signal,
+                            }),
                             signal
                         );
+                        if (signal.aborted) throw signal.reason;
+                        if (Date.now() >= deadline) throw new GenerationError("preoutput_timeout", 504);
                     }
                 }
                 if (error.upstreamHttp && !eligible && !signal.aborted && handler._handleRequestFailureScoped) {

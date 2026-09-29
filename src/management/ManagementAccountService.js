@@ -629,11 +629,14 @@ class ManagementAccountService {
         const accounts = this.store.listMetadata();
         return page(
             records.map(row => {
-                const index = Number.isSafeInteger(row.finalAuthIndex)
-                    ? row.finalAuthIndex
-                    : Number.isSafeInteger(row.initialAuthIndex)
-                      ? row.initialAuthIndex
-                      : null;
+                const index =
+                    row.attemptCount === 0
+                        ? null
+                        : Number.isSafeInteger(row.finalAuthIndex)
+                          ? row.finalAuthIndex
+                          : Number.isSafeInteger(row.initialAuthIndex)
+                            ? row.initialAuthIndex
+                            : null;
                 return {
                     accountId: accounts.find(a => a.index === index)?.accountId || null,
                     durationMs: Math.max(0, Math.floor(row.durationMs || 0)),

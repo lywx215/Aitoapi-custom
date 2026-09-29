@@ -274,6 +274,21 @@ test("read endpoints do not reload/rebalance; pagination, export scope, safe usa
     const usage = (await f.request("GET", "/usage")).json.data.items[0];
     assert.equal(usage.accountId, f.row.accountId);
     assert.equal(usage.index, 0);
+    f.system.usageStatsService.getSnapshot = () => ({
+        records: [
+            {
+                attemptCount: 0,
+                finalAuthIndex: 0,
+                initialAuthIndex: 0,
+                outcome: "error",
+                requestId: "routing-rejected",
+                statusCode: 429,
+            },
+        ],
+    });
+    const rejectedUsage = (await f.request("GET", "/usage")).json.data.items[0];
+    assert.equal(rejectedUsage.index, null);
+    assert.equal(rejectedUsage.accountId, null);
     const settings = (await f.request("GET", "/settings")).json.data;
     assert.equal(settings.values.maxRetries, 3);
     assert.equal(settings.persistentKeys.length, 8);

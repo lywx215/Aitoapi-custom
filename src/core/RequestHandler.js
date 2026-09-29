@@ -199,36 +199,137 @@ class RequestHandler {
         return this.serverSystem?.managementRuntime?.isBlocked(authIndex) === true;
     }
 
-    async _warmStandbyForModel(modelName, excluded = []) {
+    _isRoutingCancelled(options = {}) {
+        return (
+            options.signal?.aborted === true || (Number.isFinite(options.deadline) && Date.now() >= options.deadline)
+        );
+    }
+
+    async _warmStandbyForModel(modelName, excluded = [], options = {}) {
         const routeModel = this._normalizeRouteModel(modelName);
         if (!routeModel || !this.browserManager?.ensureContextForAuth) return false;
+        // Select the candidate and source in the same serialized operation.
+        // Concurrent requests must reuse the newly warmed connection instead
+        // of replacing two different source contexts with the same target.
+        const previous = this.standbyWarmupTail || Promise.resolve();
+        let cancelled = this._isRoutingCancelled(options);
+        const operation = previous
+            .catch(() => {})
+            .then(async () => {
+                if (cancelled || this._isRoutingCancelled(options)) return false;
+                if (this._selectRequestAuthIndex(excluded, routeModel) >= 0) return true;
+                return this._warmStandbyForModelUnlocked(routeModel, excluded, options);
+            });
+        // A cancelled waiter must not release a running initialization's slot.
+        this.standbyWarmupTail = operation.catch(() => {});
+        return new Promise((resolve, reject) => {
+            let timer;
+            const finish = (callback, value) => {
+                clearTimeout(timer);
+                options.signal?.removeEventListener("abort", onAbort);
+                callback(value);
+            };
+            const onAbort = () => {
+                cancelled = true;
+                finish(resolve, false);
+            };
+            options.signal?.addEventListener("abort", onAbort, { once: true });
+            if (Number.isFinite(options.deadline))
+                timer = setTimeout(onAbort, Math.max(1, options.deadline - Date.now()));
+            operation.then(
+                value => finish(resolve, value),
+                error => finish(reject, error)
+            );
+            if (cancelled || this._isRoutingCancelled(options)) onAbort();
+        });
+    }
+
+    async _warmStandbyForModelUnlocked(routeModel, excluded, options = {}) {
         const excludedSet = new Set(excluded);
-        const candidate = (this.authSource?.getRotationIndices?.() || this.authSource?.availableIndices || [])
-            .filter(index => !excludedSet.has(index) && !this.browserManager.contexts.has(index))
-            .filter(index => !this._isAuthUnavailable(index) && !this._isManagementBlocked(index))
-            .find(index => {
+        for (;;) {
+            if (this._isRoutingCancelled(options)) return false;
+            const candidate = (this.authSource?.getRotationIndices?.() || this.authSource?.availableIndices || [])
+                .filter(index => !excludedSet.has(index) && !this.browserManager.contexts.has(index))
+                .filter(index => !this._isAuthUnavailable(index) && !this._isManagementBlocked(index))
+                .filter(index => (this.standbyWarmupFailures?.get(index) || 0) <= Date.now())
+                .sort(
+                    (a, b) =>
+                        Number(this.browserManager.initializingContexts?.has(b) || false) -
+                        Number(this.browserManager.initializingContexts?.has(a) || false)
+                )
+                .find(index => {
+                    const state = this._getAccountRouteState(index);
+                    return (
+                        state.cooldownUntil <= Date.now() &&
+                        (!this._isPerAccountUsageRoutingEnabled() || !state.usageExhausted) &&
+                        !this._isInWsCrashLoop(index) &&
+                        (state.modelCooldowns?.[routeModel] || 0) <= Date.now()
+                    );
+                });
+            if (!Number.isInteger(candidate)) return false;
+            const reusingInitialization = this.browserManager.initializingContexts?.has(candidate) === true;
+
+            // A new request has no excluded account. When the pool is full, find
+            // a context that is ineligible for this model and replace it atomically.
+            // Otherwise ensureContextForAuth refuses the full pool indefinitely.
+            const sourceAuthIndex = [...new Set([...excluded, ...this.browserManager.contexts.keys()])].find(index => {
+                if (
+                    !this.browserManager.contexts.has(index) ||
+                    this._isManagementBlocked(index) ||
+                    this.browserManager.pendingContextClosures?.has(index)
+                )
+                    return false;
                 const state = this._getAccountRouteState(index);
                 return (
-                    state.cooldownUntil <= Date.now() &&
-                    !state.usageExhausted &&
-                    (state.modelCooldowns?.[routeModel] || 0) <= Date.now()
+                    state.cooldownUntil > Date.now() ||
+                    (state.modelCooldowns?.[routeModel] || 0) > Date.now() ||
+                    (this._isPerAccountUsageRoutingEnabled() && state.usageExhausted)
                 );
             });
-        if (!Number.isInteger(candidate)) return false;
-
-        const sourceAuthIndex = excluded.find(index => this.browserManager.contexts.has(index));
-        // In unlimited mode, a model 429 only changes routing eligibility;
-        // do not close the source context just to make room for a standby.
-        const warmed =
-            this.config.maxContexts === 0 ||
-            !Number.isInteger(sourceAuthIndex) ||
-            !this.browserManager.replaceContextForAuth
-                ? await this.browserManager.ensureContextForAuth(candidate)
-                : await this.browserManager.replaceContextForAuth(sourceAuthIndex, candidate, {
-                      reason: `model_429_${routeModel}`,
-                  });
-        if (warmed) this.logger.info(`[Routing] Warmed one standby account #${candidate} for model "${routeModel}".`);
-        return warmed;
+            const occupancy = this.browserManager.contexts.size + (this.browserManager.initializingContexts?.size || 0);
+            if (
+                this.config.maxContexts > 0 &&
+                !reusingInitialization &&
+                occupancy >= this.config.maxContexts &&
+                (!Number.isInteger(sourceAuthIndex) || !this.browserManager.replaceContextForAuth)
+            )
+                return false;
+            // In unlimited mode, a model 429 only changes routing eligibility;
+            // do not close the source context just to make room for a standby.
+            const warmed =
+                reusingInitialization ||
+                this.config.maxContexts === 0 ||
+                !Number.isInteger(sourceAuthIndex) ||
+                !this.browserManager.replaceContextForAuth
+                    ? await this.browserManager.ensureContextForAuth(candidate, { preserveAsStandby: true })
+                    : await this.browserManager.replaceContextForAuth(sourceAuthIndex, candidate, {
+                          activateIfSourceCurrent: true,
+                          preserveAsStandby: true,
+                          reason: `model_429_${routeModel}`,
+                          replaceOnlyWhenFull: true,
+                      });
+            if (warmed) {
+                this.standbyWarmupFailures?.delete(candidate);
+                this.logger.info(`[Routing] Warmed one standby account #${candidate} for model "${routeModel}".`);
+                return true;
+            }
+            // Initialization failures must not monopolize the standby queue on
+            // every request. Back off briefly and try the next eligible account.
+            // A pool mutation may have retired this source while we waited
+            // for its lock. Re-select a source without penalizing the target.
+            if (this.browserManager.pendingContextClosures?.has(sourceAuthIndex)) continue;
+            // Reused initialization can be cancelled by background rebalance;
+            // only failures of an initialization we started get a backoff.
+            if (!reusingInitialization) {
+                this.standbyWarmupFailures ||= new Map();
+                this.standbyWarmupFailures.set(candidate, Date.now() + 30000);
+            }
+            excludedSet.add(candidate);
+            // Legacy/non-generation callers do not provide cancellation or a
+            // request deadline. Preserve their one-candidate behavior instead
+            // of holding the shared queue through the entire credential pool.
+            if (!options.signal && !Number.isFinite(options.deadline)) return false;
+        }
     }
 
     _selectRequestAuthIndex(excluded = [], modelName = null) {
@@ -1404,13 +1505,14 @@ class RequestHandler {
         const usageStatsService = this._getUsageStatsService();
         if (!usageStatsService) return;
 
-        const initialAuthIndex = this._getRequestAuthIndex(requestId);
+        const initialAuthIndex = this._getRequestAuthIndex(requestId, -1);
 
         usageStatsService.startRequest(requestId, {
             clientIp: this._getClientIp(req),
             initialAccountName: this._getAccountNameForIndex(initialAuthIndex),
             initialAuthIndex,
             method: req.method,
+            model: requestedModel,
             path: req.path,
             ...meta,
         });
@@ -1862,14 +1964,33 @@ class RequestHandler {
         if (!res?.__generationDeadline) return this._ensureBrowserBackedRequestReadyInternal(res, options);
         let timer;
         let onClose;
-        const readiness = this._ensureBrowserBackedRequestReadyInternal(res, options).finally(() => {
-            if (res.destroyed || res.writableEnded) this._releaseRequestAuthIndex(options.requestId);
-        });
+        const controller = new AbortController();
+        const onParentAbort = () => controller.abort();
+        options.signal?.addEventListener("abort", onParentAbort, { once: true });
+        if (options.signal?.aborted) controller.abort();
+        const routingOptions = { ...options, deadline: res.__generationDeadline, signal: controller.signal };
+        const expire = () => {
+            controller.abort();
+            if (!res.destroyed && !res.writableEnded) {
+                res.__generationResult = { code: "preoutput_timeout", resultClass: "error", wireStatus: 504 };
+                this._markTrackedResponseError(res, "preoutput timeout", 504);
+                this._sendErrorResponse(res, 504, "preoutput timeout", "timeout_error");
+            }
+        };
+        const readiness = this._ensureBrowserBackedRequestReadyInternal(res, routingOptions)
+            .then(ready => {
+                if (!ready && Date.now() >= res.__generationDeadline) expire();
+                return ready;
+            })
+            .finally(() => {
+                if (res.destroyed || res.writableEnded) this._releaseRequestAuthIndex(options.requestId);
+            });
         try {
             return await Promise.race([
                 readiness,
                 new Promise(resolve => {
                     onClose = () => {
+                        controller.abort();
                         if (!res.writableFinished) {
                             this._markTrackedClientAbort(res);
                             res.__generationResult = {
@@ -1883,15 +2004,7 @@ class RequestHandler {
                     res.once("close", onClose);
                     timer = setTimeout(
                         () => {
-                            if (!res.destroyed && !res.writableEnded) {
-                                res.__generationResult = {
-                                    code: "preoutput_timeout",
-                                    resultClass: "error",
-                                    wireStatus: 504,
-                                };
-                                this._markTrackedResponseError(res, "preoutput timeout", 504);
-                                this._sendErrorResponse(res, 504, "preoutput timeout", "timeout_error");
-                            }
+                            expire();
                             resolve(false);
                         },
                         Math.max(1, res.__generationDeadline - Date.now())
@@ -1901,12 +2014,14 @@ class RequestHandler {
         } finally {
             clearTimeout(timer);
             if (onClose) res.off("close", onClose);
+            options.signal?.removeEventListener("abort", onParentAbort);
         }
     }
 
     async _ensureBrowserBackedRequestReadyInternal(res, options = {}) {
         const { logPrefix = "Request", waitErrorType = null, waitOptions, authIndex, requestId } = options;
         const routeModel = this.requestModelBindings.get(requestId) || null;
+        if (this._isRoutingCancelled(options)) return false;
 
         // HTTP starts listening before the initial context pool is ready. A
         // health check or client request during that window must wait for the
@@ -1914,6 +2029,7 @@ class RequestHandler {
         // aborting its background preload.
         if (this.authSwitcher.isSystemBusy) {
             const systemReady = await this._waitForSystemReady();
+            if (this._isRoutingCancelled(options)) return false;
             if (!systemReady) {
                 this._sendErrorResponse(
                     res,
@@ -1934,7 +2050,8 @@ class RequestHandler {
             // before returning a transient 503.
             let replacementAuthIndex = this._selectRequestAuthIndex([], routeModel);
             if (replacementAuthIndex < 0) {
-                await this._warmStandbyForModel(routeModel);
+                await this._warmStandbyForModel(routeModel, [], options);
+                if (this._isRoutingCancelled(options)) return false;
                 replacementAuthIndex = this._selectRequestAuthIndex([], routeModel);
             }
             if (replacementAuthIndex >= 0) {
@@ -1950,12 +2067,13 @@ class RequestHandler {
                     // path so an initial request can initialize an account
                     // instead of failing before recovery gets a chance.
                     const recovered = await this._handleBrowserRecovery(res);
+                    if (this._isRoutingCancelled(options)) return false;
                     if (!recovered) {
                         this._markTrackedEarlyExitIfNeeded(res, "No schedulable account connection.");
                         return false;
                     }
 
-                    const recoveredAuthIndex = this._selectRequestAuthIndex();
+                    const recoveredAuthIndex = this._selectRequestAuthIndex([], routeModel);
                     if (recoveredAuthIndex < 0) {
                         this._sendErrorResponse(res, 503, "No healthy account connection is available.", waitErrorType);
                         this._markTrackedEarlyExitIfNeeded(res, "No schedulable account connection.");
@@ -1988,7 +2106,8 @@ class RequestHandler {
                 targetAuthIndex = replacementAuthIndex;
                 this._bindRequestAuthIndex(requestId, replacementAuthIndex);
             } else {
-                await this._warmStandbyForModel(routeModel, [targetAuthIndex]);
+                await this._warmStandbyForModel(routeModel, [targetAuthIndex], options);
+                if (this._isRoutingCancelled(options)) return false;
                 const warmedAuthIndex = this._selectRequestAuthIndex([], routeModel);
                 if (warmedAuthIndex >= 0) {
                     targetAuthIndex = warmedAuthIndex;
@@ -2027,6 +2146,7 @@ class RequestHandler {
                 }
             }
             if (!recovered) recovered = await this._handleBrowserRecovery(res);
+            if (this._isRoutingCancelled(options)) return false;
             if (!recovered) {
                 this._markTrackedEarlyExitIfNeeded(res, "Service temporarily unavailable: Browser recovery failed.");
                 return false;
@@ -2034,11 +2154,13 @@ class RequestHandler {
             if (requestId) {
                 const boundAuthIndex = this._getRequestAuthIndex(requestId, -1);
                 if (!this.connectionRegistry.getConnectionByAuth(boundAuthIndex, false)) {
-                    const replacementAuthIndex = this._selectRequestAuthIndex();
-                    this._bindRequestAuthIndex(
-                        requestId,
-                        replacementAuthIndex >= 0 ? replacementAuthIndex : this.currentAuthIndex
-                    );
+                    const replacementAuthIndex = this._selectRequestAuthIndex([], routeModel);
+                    if (replacementAuthIndex < 0) {
+                        this._sendErrorResponse(res, 503, "No healthy account connection is available.", waitErrorType);
+                        return false;
+                    }
+                    this._bindRequestAuthIndex(requestId, replacementAuthIndex);
+                    targetAuthIndex = replacementAuthIndex;
                 }
             }
         }
@@ -2091,12 +2213,16 @@ class RequestHandler {
         return `immediate_status_retry_${status}`;
     }
 
-    async _performImmediateSwitchRetry(errorDetails, requestId, tracker) {
+    async _performImmediateSwitchRetry(errorDetails, requestId, tracker, options = {}) {
+        if (this._isRoutingCancelled(options)) return false;
         const sourceAuthIndex = this._getRequestAuthIndex(requestId);
-        const nextAuthIndex = this._selectRequestAuthIndex(
-            [sourceAuthIndex, ...tracker.attemptedAuthIndices],
-            tracker.modelName
-        );
+        const excluded = [sourceAuthIndex, ...tracker.attemptedAuthIndices];
+        let nextAuthIndex = this._selectRequestAuthIndex(excluded, tracker.modelName);
+        if (nextAuthIndex < 0 && Number(errorDetails?.status) === 429) {
+            await this._warmStandbyForModel(tracker.modelName, excluded, options);
+            if (this._isRoutingCancelled(options)) return false;
+            nextAuthIndex = this._selectRequestAuthIndex(excluded, tracker.modelName);
+        }
         if (nextAuthIndex >= 0) {
             this._bindRequestAuthIndex(requestId, nextAuthIndex);
             tracker.attemptedAuthIndices.add(nextAuthIndex);
@@ -2142,7 +2268,8 @@ class RequestHandler {
         return true;
     }
 
-    async _prepareImmediateStatusRetry(errorDetails, requestId, tracker, sourceAuthIndex) {
+    async _prepareImmediateStatusRetry(errorDetails, requestId, tracker, sourceAuthIndex, options = {}) {
+        if (this._isRoutingCancelled(options)) return false;
         const currentAuthIndex = this._getRequestAuthIndex(requestId, this.currentAuthIndex);
         const hasSourceAuth = Number.isInteger(sourceAuthIndex) && sourceAuthIndex >= 0;
         const hasCurrentAuth = Number.isInteger(currentAuthIndex) && currentAuthIndex >= 0;
@@ -2151,6 +2278,7 @@ class RequestHandler {
             const ready = await this._waitForSystemAndConnectionIfBusy(null, {
                 sendError: () => {},
             });
+            if (this._isRoutingCancelled(options)) return false;
             if (!ready) {
                 throw new Error(
                     `System not ready after non-current account retry preparation for request #${requestId}: ` +
@@ -2163,14 +2291,19 @@ class RequestHandler {
                 tracker.modelName
             );
             if (retryAuthIndex < 0 && Number(errorDetails?.status) === 429) {
-                await this._warmStandbyForModel(tracker.modelName, [sourceAuthIndex, ...tracker.attemptedAuthIndices]);
+                await this._warmStandbyForModel(
+                    tracker.modelName,
+                    [sourceAuthIndex, ...tracker.attemptedAuthIndices],
+                    options
+                );
+                if (this._isRoutingCancelled(options)) return false;
                 retryAuthIndex = this._selectRequestAuthIndex(
                     [sourceAuthIndex, ...tracker.attemptedAuthIndices],
                     tracker.modelName
                 );
             }
             if (sourceAuthIndex === retryAuthIndex) {
-                return this._performImmediateSwitchRetry(errorDetails, requestId, tracker);
+                return this._performImmediateSwitchRetry(errorDetails, requestId, tracker, options);
             }
             if (!Number.isInteger(retryAuthIndex) || retryAuthIndex < 0) {
                 this.logger.warn(
@@ -2197,7 +2330,7 @@ class RequestHandler {
             return true;
         }
 
-        return this._performImmediateSwitchRetry(errorDetails, requestId, tracker);
+        return this._performImmediateSwitchRetry(errorDetails, requestId, tracker, options);
     }
 
     _logFinalRequestFailure(errorDetails, contextLabel = "Request", requestId = null, options = {}) {

@@ -2112,6 +2112,15 @@ class BrowserManager {
         if (this.authSource?.isUnavailable?.(authIndex)) return false;
         if (this.contexts.has(authIndex)) return true;
         if (this._contextInitPromises.has(authIndex)) return this._contextInitPromises.get(authIndex);
+        if (this.initializingContexts.has(authIndex)) {
+            try {
+                await this._waitForContextInit(authIndex);
+                return this.contexts.has(authIndex) && !this.authSource?.isUnavailable?.(authIndex);
+            } catch (error) {
+                this.logger.warn(`[ContextPool] Waiting for context #${authIndex} failed: ${error.message}`);
+                return false;
+            }
+        }
 
         if (this.contexts.has(authIndex)) return true;
         const maxContexts = this.config.maxContexts;
@@ -2142,20 +2151,46 @@ class BrowserManager {
     }
 
     async ensureContextForAuth(authIndex, options = {}) {
-        return this._ensureContextForAuthUnlocked(authIndex, options);
+        const ready = await this._ensureContextForAuthUnlocked(authIndex, options);
+        if (ready && options.preserveAsStandby === true) {
+            this.modelStandbyContexts ||= new Set();
+            this.modelStandbyContexts.add(authIndex);
+        }
+        return ready;
     }
 
     async replaceContextForAuth(sourceAuthIndex, targetAuthIndex, options = {}) {
         return this._withContextPoolMutation(async () => {
             if (sourceAuthIndex === targetAuthIndex) return this.contexts.has(targetAuthIndex);
-            const ready = await this.ensureContextForAuth(targetAuthIndex, { allowTemporaryOverflow: true });
+            const replaceSource =
+                options.replaceOnlyWhenFull !== true ||
+                (!this.contexts.has(targetAuthIndex) &&
+                    !this.initializingContexts.has(targetAuthIndex) &&
+                    this.config.maxContexts > 0 &&
+                    this.contexts.size + this.initializingContexts.size >= this.config.maxContexts);
+            if (
+                options.replaceOnlyWhenFull === true &&
+                replaceSource &&
+                this.pendingContextClosures?.has(sourceAuthIndex)
+            )
+                return false;
+            const ready = await this.ensureContextForAuth(targetAuthIndex, {
+                allowTemporaryOverflow: true,
+                preserveAsStandby: options.preserveAsStandby,
+            });
             if (!ready) return false;
             if (!this.contexts.has(targetAuthIndex)) return false;
-            if (options.activateTarget === true && this.contexts.has(targetAuthIndex)) {
+            if (
+                (options.activateTarget === true ||
+                    (replaceSource &&
+                        options.activateIfSourceCurrent === true &&
+                        this.currentAuthIndex === sourceAuthIndex)) &&
+                this.contexts.has(targetAuthIndex)
+            ) {
                 const target = this.contexts.get(targetAuthIndex);
                 this._activateContext(target.context, target.page, targetAuthIndex);
             }
-            if (this.contexts.has(sourceAuthIndex)) {
+            if (replaceSource && this.contexts.has(sourceAuthIndex)) {
                 await this._closeContextForPoolIfPossible(
                     sourceAuthIndex,
                     options.reason || "atomic_context_replacement"
@@ -2228,7 +2263,22 @@ class BrowserManager {
             );
             targets = new Set(nonExpiredAvailable);
         } else {
-            targets = new Set(ordered.slice(0, maxContexts));
+            // Keep model standbys that replaced cooled rotation-window slots.
+            // Otherwise draining an old queue would rebalance back to the
+            // cooled account and immediately evict the new healthy standby.
+            const standbys = ordered.filter(
+                idx =>
+                    this.modelStandbyContexts?.has(idx) &&
+                    this.contexts.has(idx) &&
+                    !this.pendingContextClosures.has(idx)
+            );
+            const preferred = [
+                ...(ordered.includes(currentCanonical) ? [currentCanonical] : []),
+                ...standbys,
+                ...ordered.filter(idx => this.contexts.has(idx) && !this.pendingContextClosures.has(idx)),
+                ...ordered,
+            ];
+            targets = new Set([...new Set(preferred)].slice(0, maxContexts));
         }
 
         for (const idx of targets) {
@@ -2882,6 +2932,7 @@ class BrowserManager {
      * @param {number} authIndex - The auth index to close
      */
     async closeContext(authIndex) {
+        this.modelStandbyContexts?.delete(authIndex);
         this.pendingContextClosures.delete(authIndex);
 
         // If context is being initialized in background, signal abort and wait
@@ -2983,6 +3034,7 @@ class BrowserManager {
 
         // Reset all references
         this.contexts.clear();
+        this.modelStandbyContexts?.clear();
         this.initializingContexts.clear();
         this.abortedContexts.clear();
         this.pendingContextClosures.clear();
