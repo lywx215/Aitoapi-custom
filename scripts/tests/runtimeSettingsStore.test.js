@@ -108,6 +108,105 @@ function test(name, run) {
     tests.push({ name, run });
 }
 
+async function atRoot(root, run) {
+    const originalCwd = process.cwd;
+    process.cwd = () => root;
+    try {
+        await run();
+    } finally {
+        process.cwd = originalCwd;
+    }
+}
+
+test("default settings writer persists in data and startup restores maxContexts after container replacement", () =>
+    withFixture(async ({ root }) =>
+        atRoot(root, async () => {
+            const config = defaults();
+            const store = new RuntimeSettingsStore({ config });
+            assert.equal(store.filePath, path.join(root, "data", "runtime-settings.json"));
+            await store.update({ maxContexts: 3 });
+            assert(!fs.existsSync(path.join(root, "configs", "runtime-settings.json")));
+            const restarted = defaults();
+            new ConfigLoader({ info() {}, warn() {} })._applyRuntimeSettings(restarted);
+            assert.equal(restarted.maxContexts, 3);
+            assert.deepEqual(Object.keys(await read(store.filePath)).sort(), persistentKeys);
+            assert(!JSON.stringify(await read(store.filePath)).includes("fixture-secret"));
+        })
+    ));
+
+test("legacy settings migrate once, survive losing configs, and cannot overwrite later data settings", () =>
+    withFixture(async ({ root, filePath, store }) =>
+        atRoot(root, async () => {
+            await store.update({ maxContexts: 3, maxRetries: 7 });
+            const legacy = fs.readFileSync(filePath, "utf8");
+            const migrated = defaults();
+            new ConfigLoader({ info() {}, warn() {} })._applyRuntimeSettings(migrated);
+            const dataPath = RuntimeSettingsStore.defaultFilePath();
+            assert.equal((await read(dataPath)).maxContexts, 3);
+            assert.equal(fs.readFileSync(filePath, "utf8"), legacy);
+            const current = new RuntimeSettingsStore({ config: migrated });
+            await current.update({ maxContexts: 4 });
+            const reloaded = defaults();
+            new ConfigLoader({ info() {}, warn() {} })._applyRuntimeSettings(reloaded);
+            assert.equal(reloaded.maxContexts, 4);
+            fs.unlinkSync(filePath); // Container replacement drops the old writable-layer file.
+            const replaced = defaults();
+            new ConfigLoader({ info() {}, warn() {} })._applyRuntimeSettings(replaced);
+            assert.equal(replaced.maxContexts, 4);
+            assert.equal(replaced.maxRetries, 7);
+        })
+    ));
+
+test("failed legacy migration keeps the original file and effective values with a visible warning", () =>
+    withFixture(async ({ root, filePath, store }) =>
+        atRoot(root, async () => {
+            await store.update({ maxContexts: 3 });
+            const before = fs.readFileSync(filePath, "utf8");
+            const originalRename = fs.renameSync;
+            const warnings = [];
+            const config = defaults();
+            try {
+                fs.renameSync = () => {
+                    throw ioError("EACCES");
+                };
+                new ConfigLoader({
+                    info() {},
+                    warn(message) {
+                        warnings.push(message);
+                    },
+                })._applyRuntimeSettings(config);
+            } finally {
+                fs.renameSync = originalRename;
+            }
+            assert.equal(config.maxContexts, 3);
+            assert.equal(fs.readFileSync(filePath, "utf8"), before);
+            assert(!fs.existsSync(RuntimeSettingsStore.defaultFilePath()));
+            assert.deepEqual(fs.readdirSync(path.join(root, "data")), []);
+            assert(warnings.some(message => message.includes("Could not migrate")));
+        })
+    ));
+
+test("malformed persistent settings do not resurrect an older legacy file", () =>
+    withFixture(async ({ root, store }) =>
+        atRoot(root, async () => {
+            await store.update({ maxContexts: 3 });
+            const dataPath = RuntimeSettingsStore.defaultFilePath();
+            fs.mkdirSync(path.dirname(dataPath), { recursive: true });
+            fs.writeFileSync(dataPath, "{broken");
+            const config = defaults();
+            const warnings = [];
+            new ConfigLoader({
+                info() {},
+                warn(message) {
+                    warnings.push(message);
+                },
+            })._applyRuntimeSettings(config);
+            assert.equal(config.maxContexts, 1);
+            assert.equal(fs.readFileSync(dataPath, "utf8"), "{broken");
+            assert(warnings.length > 0);
+        })
+    ));
+
 test("snapshot/result/callback are detached and never expose credentials", () =>
     withFixture(async ({ config, filePath, store }) => {
         const snapshot = store.snapshot();

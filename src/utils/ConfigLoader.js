@@ -8,6 +8,7 @@
 const fs = require("fs");
 const path = require("path");
 const { getProxySummaryFromEnv } = require("./ProxyUtils");
+const RuntimeSettingsStore = require("../storage/RuntimeSettingsStore");
 
 const DEFAULT_AI_STUDIO_APP_URL = "https://ai.studio/apps/d31dbffc-6199-4f09-9da5-45de7684ab8a";
 
@@ -284,12 +285,15 @@ class ConfigLoader {
     }
 
     _applyRuntimeSettings(config) {
-        const runtimeSettingsPath = path.join(process.cwd(), "configs", "runtime-settings.json");
+        const persistentPath = RuntimeSettingsStore.defaultFilePath(process.cwd());
+        const runtimeSettingsPath = fs.existsSync(persistentPath)
+            ? persistentPath
+            : path.join(process.cwd(), "configs", "runtime-settings.json");
         if (!fs.existsSync(runtimeSettingsPath)) return;
 
         try {
             const raw = JSON.parse(fs.readFileSync(runtimeSettingsPath, "utf-8"));
-            if (!raw || typeof raw !== "object") return;
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
 
             const isIntegerInRange = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
 
@@ -316,6 +320,16 @@ class ConfigLoader {
                 config.autoHealProbeTimeoutMs = raw.autoHealProbeTimeoutMs;
             }
             this.logger.info(`[Config] Applied runtime settings from ${runtimeSettingsPath}.`);
+            if (runtimeSettingsPath !== persistentPath) {
+                try {
+                    RuntimeSettingsStore.migrateLegacy(config, persistentPath);
+                    this.logger.info(`[Config] Migrated runtime settings to ${persistentPath}.`);
+                } catch {
+                    this.logger.warn(
+                        "[Config] Could not migrate runtime settings to data/; check persistent storage permissions. Legacy settings remain active for this process."
+                    );
+                }
+            }
         } catch (error) {
             this.logger.warn(`[Config] Ignoring invalid runtime settings file: ${error.message}`);
         }

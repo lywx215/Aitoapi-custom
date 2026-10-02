@@ -14,6 +14,10 @@
 # Node.js dependencies
 node_modules/
 
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+
 # Camoufox browser
 camoufox/
 camoufox-linux/
@@ -28,6 +32,9 @@ cache/
 
 # Usage statistics data
 data/
+
+# Local production load-test measurements (never credentials)
+artifacts/loadtest/
 
 # Runtime settings are created and managed by the Web UI
 configs/runtime-settings.json

@@ -23,7 +23,7 @@ class StatusRoutes {
         this.logger = serverSystem.logger;
         this.config = serverSystem.config;
         this.distIndexPath = serverSystem.distIndexPath;
-        this.runtimeSettingsPath = path.join(process.cwd(), "configs", "runtime-settings.json");
+        this.runtimeSettingsPath = RuntimeSettingsStore.defaultFilePath();
         this.config.debugMode = LoggingService.getLevel() === "DEBUG";
         this.runtimeSettingsStore =
             serverSystem.runtimeSettingsStore ||

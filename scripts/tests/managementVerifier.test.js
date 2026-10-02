@@ -27,6 +27,7 @@ function defaultConfig() {
                 };
             if (name === "path") return path;
             if (name === "./ProxyUtils") return { getProxySummaryFromEnv: () => "fixture" };
+            if (name === "../storage/RuntimeSettingsStore") return require("../../src/storage/RuntimeSettingsStore");
             throw new Error("Unexpected loader dependency");
         },
     };

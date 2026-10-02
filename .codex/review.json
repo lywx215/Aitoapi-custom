@@ -1,0 +1,12 @@
+{
+  "plan": ".codex/review-plan.md",
+  "requirements": ["README_CUSTOM.md"],
+  "deliverables": [
+    "*.js", "*.md", "*.json", "*.yaml", "*.yml", "Dockerfile", ".env.example",
+    "src/**/*.js", "src/**/*.ts", "src/**/*.tsx", "src/**/*.vue",
+    "ui/**/*.js", "ui/**/*.ts", "ui/**/*.tsx", "ui/**/*.vue", "ui/**/*.css",
+    "scripts/**/*.js", "scripts/**/*.ts", "scripts/**/*.sh", "scripts/**/*.ps1",
+    "configs/**/*.json", "configs/**/*.yaml", "contracts/**/*.json", "contracts/**/*.yaml",
+    "docs/**/*.md", ".github/**/*.yml", ".github/**/*.yaml"
+  ]
+}

@@ -78,12 +78,30 @@ function settingsError(code, message, status, cause) {
  * An application failure returns applied:false and does not roll back a commit.
  */
 class RuntimeSettingsStore {
-    constructor({
-        config,
-        logger,
-        filePath = path.join(process.cwd(), "configs", "runtime-settings.json"),
-        onApplied,
-    }) {
+    static defaultFilePath(rootDir = process.cwd()) {
+        return path.join(rootDir, "data", "runtime-settings.json");
+    }
+
+    // Startup migration is synchronous, before the server admits settings writes.
+    // Save only the same non-secret fields as an ordinary settings save.
+    static migrateLegacy(config, filePath) {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        const temporary = `${filePath}.${randomUUID()}.tmp`;
+        let fd;
+        try {
+            fd = fs.openSync(temporary, "wx", 0o600);
+            fs.writeFileSync(fd, JSON.stringify(pickValues(config, PERSISTENT_KEYS), null, 2));
+            fs.fsyncSync(fd);
+            fs.closeSync(fd);
+            fd = undefined;
+            fs.renameSync(temporary, filePath);
+        } finally {
+            if (fd !== undefined) fs.closeSync(fd);
+            if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+        }
+    }
+
+    constructor({ config, logger, filePath = RuntimeSettingsStore.defaultFilePath(), onApplied }) {
         if (!config || typeof config !== "object" || Array.isArray(config)) {
             throw new TypeError("RuntimeSettingsStore requires a shared config object.");
         }

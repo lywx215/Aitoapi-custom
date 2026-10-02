@@ -133,7 +133,7 @@ flowchart LR
 - `production`：加载 `.env`；
 - 其他环境：加载 `.env.development`。
 
-`ConfigLoader` 先创建默认配置，再应用环境变量，随后应用 `configs/runtime-settings.json` 中由 Web UI 保存的运行参数。当前实现中，运行时文件对其包含的字段具有更高优先级。
+`ConfigLoader` 先创建默认配置，再应用环境变量，随后应用 `data/runtime-settings.json` 中由 Web UI 保存的运行参数。当前实现中，运行时文件对其包含的字段具有更高优先级。新文件不存在时兼容读取旧 `configs/runtime-settings.json`，将已验证的持久化字段原子迁移到 `data/`，保留旧文件；新文件已存在时不再读取旧文件。迁移失败会告警，旧设置仍在当前进程生效。
 
 随后读取 `configs/models.json`。读取失败时只暴露 `models/gemini-2.5-flash-lite` 作为回退模型。
 
@@ -350,7 +350,7 @@ gemini-3-flash-preview-high-fake-search-code
 | ------------------------------- | -------------------------------- | ---------------- |
 | 代码默认值                      | 所有基础默认值                   | 随代码           |
 | `.env` / `.env.development`     | 启动、密钥、浏览器、调度默认值   | 运维维护         |
-| `configs/runtime-settings.json` | Web UI 可持久化的数值配置        | 自动生成         |
+| `data/runtime-settings.json` | Web UI 可持久化的数值配置        | 自动生成；挂载 `data/` 持久卷 |
 | Web UI 内存切换                 | 流模式、强制工具、日志等部分开关 | 部分仅到进程重启 |
 
 Web UI 当前持久化：`maxContexts`、`maxRetries`、`retryDelay`、`autoDisableStatusCodes`、两个 429 冷却参数、AutoHeal 周期和超时。
@@ -362,7 +362,7 @@ Web UI 当前持久化：`maxContexts`、`maxRetries`、`retryDelay`、`autoDisa
 | 路径                            | 内容                                    | Git 状态 / 注意事项 |
 | ------------------------------- | --------------------------------------- | ------------------- |
 | `configs/auth/auth-N.json`      | Playwright storage state + 账号状态字段 | 已忽略；敏感凭证    |
-| `configs/runtime-settings.json` | UI 持久化参数                           | 已忽略              |
+| `data/runtime-settings.json` | UI 持久化参数                           | 已忽略；从旧 `configs/` 文件迁移 |
 | `data/usage-stats.jsonl`        | 请求统计                                | 已忽略；持续增长    |
 | `data/account-route-state.json` | 冷却、quota 与错误状态                  | 已忽略              |
 | `data/account-credential-tests.json` | 当前/最近完成凭证测试、回复摘要及提交去重记录 | 已忽略；不含凭证，原子写入 |
@@ -371,7 +371,7 @@ Web UI 当前持久化：`maxContexts`、`maxRetries`、`retryDelay`、`autoDisa
 | `proxylist.txt`                 | 每账号固定代理候选                      | 已忽略；可能含密码  |
 | `proxy_mapping.json`            | 账号到代理的稳定映射                    | 已忽略；原子写入    |
 
-部署备份和迁移至少要覆盖 `configs/auth/`、`configs/runtime-settings.json`、`data/`、`proxylist.txt` 和 `proxy_mapping.json`。不得把这些文件提交到仓库、日志或问题附件。
+部署备份和迁移至少要覆盖 `configs/auth/`、`data/`、`proxylist.txt` 和 `proxy_mapping.json`；升级前也应备份旧 `configs/runtime-settings.json`。仅挂载 `/app/configs/auth` 不会保留同级的设置文件，因此运行参数统一写入 `/app/data/runtime-settings.json`。若旧容器的设置已经丢失，升级后需在页面重新保存一次期望值。不得把这些文件提交到仓库、日志或问题附件。
 
 ### 9.3 固定代理
 
